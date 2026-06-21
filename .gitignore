@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+*.log
+.idea/
+.vscode/
+.plans/
+.logs/
+# deploy tooling — carries live server credentials, never commit
+.deploy/
+# dev/maintenance scripts — not part of the published library
+scripts/

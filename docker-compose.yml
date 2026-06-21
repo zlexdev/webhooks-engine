@@ -1,0 +1,40 @@
+services:
+  wh-db:
+    container_name: wh-db
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: webhooks
+      POSTGRES_PASSWORD: webhooks
+      POSTGRES_DB: webhooks
+    volumes:
+      - wh_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U webhooks"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  wh-api:
+    container_name: wh-api
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${WHE_HOST_PORT:-8090}:8080"
+    environment:
+      WHE_BACKEND: pg
+      WHE_PG_DSN: postgresql+asyncpg://webhooks:webhooks@wh-db:5432/webhooks
+      WHE_SOURCE_KEY: ${WHE_SOURCE_KEY:?Set WHE_SOURCE_KEY in .env or environment}
+      WHE_HOST: 0.0.0.0
+      WHE_PORT: "8080"
+    depends_on:
+      wh-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  wh_pg_data:
