@@ -173,6 +173,11 @@ db.wh_events.insertMany([
 
 > `asyncbus` is a private dependency used only for the optional dead-letter event; the service runs with it disabled. See `Dockerfile` for the PAT-gated install line.
 
+## Configuration
+
+Every `WHE_*` env var, with defaults, lives in [`.env.example`](.env.example) — copy it to `.env` and
+fill in the backend you're using, or generate one with `python scripts/install.py --backend pg`.
+
 ## Deploy
 
 The stack is collision-proof on a shared box: containers are prefixed (`wh-api`, `wh-db`), the volume
@@ -185,16 +190,37 @@ and the API port is `${WHE_HOST_PORT:-8090}`. Pin the compose project with `-p w
 git clone https://github.com/zlexdev/webhooks-engine /etc/webhooks-engine
 # .env: a stable source key + a free host port (override 8090 if it's taken)
 printf 'WHE_SOURCE_KEY=%s\nWHE_HOST_PORT=8090\n' "$(openssl rand -hex 32)" > /etc/webhooks-engine/.env
-docker compose -p wh --project-directory /etc/webhooks-engine \
+
+# pick a working compose invocation: v2 plugin, legacy docker-compose, or install the plugin
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE=(docker-compose)
+elif command -v apt-get >/dev/null 2>&1 && apt-get update -qq && apt-get install -y docker-compose-plugin && docker compose version >/dev/null 2>&1; then
+  COMPOSE=(docker compose)
+else
+  curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
+    -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
+  COMPOSE=(docker-compose)
+fi
+
+"${COMPOSE[@]}" -p wh --project-directory /etc/webhooks-engine \
   --env-file /etc/webhooks-engine/.env \
   -f /etc/webhooks-engine/docker-compose.yml up -d --build
 sleep 5 && curl -fsS "http://localhost:8090/health" && echo "  OK"
 ```
 
+> No `docker compose` plugin on the box (old Docker install)? The snippet above detects it and
+> falls back to `apt-get install docker-compose-plugin`, or a standalone `docker-compose` binary if
+> `apt` isn't available — `docker compose -p wh ...` failing with `Usage: docker [OPTIONS] COMMAND`
+> and `unknown shorthand flag: 'p'` is exactly that missing-plugin case.
+
 **Uninstall (copy-paste — removes containers, network, image, DB volume and files):**
 
 ```bash
 docker compose -p wh --project-directory /etc/webhooks-engine \
+  -f /etc/webhooks-engine/docker-compose.yml down --remove-orphans 2>/dev/null || \
+docker-compose -p wh --project-directory /etc/webhooks-engine \
   -f /etc/webhooks-engine/docker-compose.yml down --remove-orphans
 docker volume rm wh_wh_pg_data 2>/dev/null || true   # drop the Postgres data volume (irreversible)
 docker image rm wh_wh-api 2>/dev/null || true        # drop the built image
