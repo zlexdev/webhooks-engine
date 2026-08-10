@@ -81,14 +81,18 @@ ignore_missing_imports = false
 module                 = "asyncbus.*"
 ignore_missing_imports = true
 
-# Consequence of the override above: without asyncbus installed its base classes
-# resolve to Any, and strict mode rejects subclassing Any. These two modules do
-# exactly that, by design — they are the optional bus surface. Anywhere asyncbus
-# IS installed (a consumer with the `bus` extra) they are checked normally; here
-# the type-checker simply has nothing to check them against.
+# The bus modules subclass asyncbus types. Without asyncbus installed those
+# bases are Any and strict rejects the subclassing, so each class line carries
+# an inline `type: ignore[misc]`. With asyncbus installed the same ignores are
+# unused — and strict flags that too. One codebase, two truths.
+#
+# So `unused-ignore` is off for exactly these two modules. It is the one code
+# that cannot conceal a defect: the worst it hides is a stale ignore comment.
+# `misc` itself stays ON, line-scoped to the class declarations, so a real
+# override incompatibility elsewhere in these files is still caught.
 [[tool.mypy.overrides]]
 module             = ["webhook_engine.events", "webhook_engine.fanout"]
-disable_error_code = ["misc"]
+disable_error_code = ["unused-ignore"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

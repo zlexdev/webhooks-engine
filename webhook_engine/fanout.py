@@ -46,7 +46,7 @@ def _event_to_raw(event: BaseEvent) -> dict[str, object]:
     return asdict(event)
 
 
-class WebhookFanoutHandler(EventHandler[BaseEvent]):
+class WebhookFanoutHandler(EventHandler[BaseEvent]):  # type: ignore[misc]  # asyncbus is optional; absent, EventHandler is Any
     """Generic handler subclass. The installer synthesizes one concrete
     subclass per catalog entry via :meth:`specialize`.
 

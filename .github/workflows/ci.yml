@@ -8,9 +8,12 @@ on:
 permissions:
   contents: read
 
+# Superseded PR pushes are cancelled; pushes to main are not. Grouping main by
+# ref would let one push cancel the previous commit's run, leaving that commit
+# with no verdict at all — "cancelled" reads like neither pass nor fail.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:

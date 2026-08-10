@@ -40,7 +40,7 @@ __all__ = [
     )
 )
 @dataclass(frozen=True, slots=True)
-class WebhookDeliveryExhausted(PostEvent):
+class WebhookDeliveryExhausted(PostEvent):  # type: ignore[misc]  # asyncbus is optional; absent, PostEvent is Any
     delivery_id: str = ""
     subscription_id: str = ""
     owner_id: str = ""
@@ -60,7 +60,7 @@ class WebhookDeliveryExhausted(PostEvent):
     )
 )
 @dataclass(frozen=True, slots=True)
-class WebhookSubscriptionCreated(PostEvent):
+class WebhookSubscriptionCreated(PostEvent):  # type: ignore[misc]  # asyncbus is optional; absent, PostEvent is Any
     subscription_id: str = ""
     owner_id: str = ""
     url_host: str = ""
@@ -79,7 +79,7 @@ class WebhookSubscriptionCreated(PostEvent):
     )
 )
 @dataclass(frozen=True, slots=True)
-class WebhookSubscriptionUpdated(PostEvent):
+class WebhookSubscriptionUpdated(PostEvent):  # type: ignore[misc]  # asyncbus is optional; absent, PostEvent is Any
     subscription_id: str = ""
     owner_id: str = ""
     changed_fields: tuple[str, ...] = ()
@@ -96,7 +96,7 @@ class WebhookSubscriptionUpdated(PostEvent):
     )
 )
 @dataclass(frozen=True, slots=True)
-class WebhookSubscriptionPaused(PostEvent):
+class WebhookSubscriptionPaused(PostEvent):  # type: ignore[misc]  # asyncbus is optional; absent, PostEvent is Any
     subscription_id: str = ""
     owner_id: str = ""
     reason: str = "user_action"
@@ -113,7 +113,7 @@ class WebhookSubscriptionPaused(PostEvent):
     )
 )
 @dataclass(frozen=True, slots=True)
-class WebhookSubscriptionResumed(PostEvent):
+class WebhookSubscriptionResumed(PostEvent):  # type: ignore[misc]  # asyncbus is optional; absent, PostEvent is Any
     subscription_id: str = ""
     owner_id: str = ""
 
@@ -129,7 +129,7 @@ class WebhookSubscriptionResumed(PostEvent):
     )
 )
 @dataclass(frozen=True, slots=True)
-class WebhookSubscriptionDeleted(PostEvent):
+class WebhookSubscriptionDeleted(PostEvent):  # type: ignore[misc]  # asyncbus is optional; absent, PostEvent is Any
     subscription_id: str = ""
     owner_id: str = ""
 
@@ -145,7 +145,7 @@ class WebhookSubscriptionDeleted(PostEvent):
     )
 )
 @dataclass(frozen=True, slots=True)
-class WebhookSubscriptionSecretRotated(PostEvent):
+class WebhookSubscriptionSecretRotated(PostEvent):  # type: ignore[misc]  # asyncbus is optional; absent, PostEvent is Any
     subscription_id: str = ""
     owner_id: str = ""
 
@@ -164,7 +164,7 @@ class WebhookSubscriptionSecretRotated(PostEvent):
     )
 )
 @dataclass(frozen=True, slots=True)
-class WebhookSubscriptionAutoSuspended(PostEvent):
+class WebhookSubscriptionAutoSuspended(PostEvent):  # type: ignore[misc]  # asyncbus is optional; absent, PostEvent is Any
     subscription_id: str = ""
     owner_id: str = ""
     url_host: str = ""

@@ -19,6 +19,8 @@
 # FastAPI application factory and CLI entry point.
 
 
+_version() -> str
+
 create_app(settings: Settings? = None) -> FastAPI
 
 main() -> None
@@ -164,7 +166,7 @@ cls Settings(BaseSettings)
 
 cls MongoSubscriptionStore
   # CRUD for subscriptions backed by a MongoDB collection (Motor).
-  __init__(collection: AsyncIOMotorCollection) -> None
+  __init__(collection: AsyncIOMotorCollection[Any) -> None
   async ensure_schema() -> None
     # Create indexes on the collection (idempotent).
   async for_event(event_name: str, _tenant_id: str?) -> list[SubscriptionSnapshot]

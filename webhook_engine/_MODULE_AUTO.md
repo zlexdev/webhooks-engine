@@ -7,7 +7,7 @@
 
 - [`_shared/`](_shared/_MODULE_AUTO.md) (2 py, 2 fn)
 - [`ingest/`](ingest/_MODULE_AUTO.md) — Ingestion layer — producers write events to a shared DB; the engine reads. (6 py, 9 cls)
-- [`service/`](service/_MODULE_AUTO.md) — Standalone HTTP microservice layer — optional, behind the ``service`` extra. (15 py, 29 cls, 43 fn)
+- [`service/`](service/_MODULE_AUTO.md) — Standalone HTTP microservice layer — optional, behind the ``service`` extra. (15 py, 29 cls, 44 fn)
 - [`stores/`](stores/_MODULE_AUTO.md) — Persistence stores for webhook delivery — pick a backend at bootstrap. (5 py, 8 cls, 9 fn)
 
 ## __init__.py
