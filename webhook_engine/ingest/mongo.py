@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import BulkWriteError, DuplicateKeyError
 
-from libs.shared.logging import get_logger
+from webhook_engine._shared.logging import get_logger
 from webhook_engine.ingest.base import BaseEventStore
 from webhook_engine.ingest.events import IncomingEvent
 

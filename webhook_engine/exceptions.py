@@ -1,6 +1,6 @@
 """Webhook exception hierarchy.
 
-All errors raised by ``libs/webhooks`` inherit from :class:`WebhookError`
+All errors raised by ``webhook_engine`` inherit from :class:`WebhookError`
 and stay inside the package — registry, dispatcher, and ssrf_guard
 raise and catch them internally. None bubble to HTTP handlers, so there
 is no entry in ``app/api/middleware/error_handler.py::_DOMAIN_ERROR_MAP``;
@@ -33,7 +33,7 @@ __all__ = [
 
 
 class WebhookError(Exception):
-    """Base for every error raised inside ``libs/webhooks``.
+    """Base for every error raised inside ``webhook_engine``.
 
     Accepts arbitrary keyword context that gets stashed on the instance
     so structured loggers can pull it out without re-parsing the message.

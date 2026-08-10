@@ -1,4 +1,4 @@
-"""Structlog shim — mirrors the monorepo's libs.shared.logging API."""
+"""Structlog shim, private to the package. Not part of the public API."""
 
 from __future__ import annotations
 

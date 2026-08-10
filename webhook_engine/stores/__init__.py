@@ -2,8 +2,8 @@
 
 - Redis: :class:`RedisWebhookDeliveryStore` (``stores/redis.py``).
 - Postgres: :class:`PgWebhookDeliveryStore` + :class:`PgSubscriptionReader`
-  (``stores/pg.py``) — session-factory + repo-ctor injection, no app
-  imports inside libs.
+  (``stores/pg.py``) — session-factory + repo-ctor injection, so the
+  package never imports a host application's models.
 """
 
 from webhook_engine.protocols import (

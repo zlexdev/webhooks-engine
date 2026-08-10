@@ -1,7 +1,7 @@
 """Protocol contracts — services don't couple to redis / httpx.
 
 Concrete implementations live elsewhere:
-- :class:`WebhookDeliveryStoreProtocol` → ``libs/webhooks/stores/redis.py``
+- :class:`WebhookDeliveryStoreProtocol` → ``webhook_engine/stores/redis.py``
 - :class:`HttpSenderProtocol` → ``api/services/webhooks/http_sender.py``
 - :class:`SubscriptionReaderProtocol` → ``api/services/webhooks/subscription_reader.py``
 """

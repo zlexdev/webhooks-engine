@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from libs.shared.logging import get_logger
+from webhook_engine._shared.logging import get_logger
 from webhook_engine.enums import DeliveryStatus
 from webhook_engine.stores.pg import (
     PgWebhookDeliveryStore,

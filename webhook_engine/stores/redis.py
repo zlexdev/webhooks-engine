@@ -21,7 +21,7 @@ from collections.abc import Awaitable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from libs.shared.logging import get_logger
+from webhook_engine._shared.logging import get_logger
 from webhook_engine.config import WebhookStorageConfig
 from webhook_engine.enums import DeliveryStatus
 from webhook_engine.stores.base import BaseWebhookDeliveryStore

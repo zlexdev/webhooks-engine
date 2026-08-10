@@ -2,10 +2,6 @@
 requires      = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# setuptools is used (not hatchling) because we need package-dir remapping:
-# the library lives in webhook-engine/ (hyphen — not importable) and must be
-# exposed as libs.webhooks.* to match the existing import namespace.
-
 [project]
 name            = "webhook-engine"
 version         = "0.1.0"
@@ -17,7 +13,9 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27",
     "structlog>=24.1",
-    "redis[asyncio]>=5",
+    # No [asyncio] extra: since redis>=4.2 the async client ships in the base
+    # package, and asking for the extra makes resolvers warn (then error).
+    "redis>=5",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "fastapi>=0.111",
@@ -49,12 +47,14 @@ Changelog  = "https://github.com/zlexdev/webhooks-engine/blob/master/CHANGELOG.m
 webhook-engine = "webhook_engine.service.app:main"
 
 # ── package layout ───────────────────────────────────────────────────────────
-# Two top-level packages: webhook_engine/ (the library) and libs/ (the shared
-# logging/time shims). Both are plain importable packages — no package-dir remap.
+# ONE top-level package. The logging/time shims live in webhook_engine/_shared/
+# rather than a top-level libs/ — that name is too generic to claim in a
+# consumer's site-packages, and the collision would surface as a wrong import
+# rather than an install error.
 
 [tool.setuptools.packages.find]
 where   = ["."]
-include = ["webhook_engine*", "libs*"]
+include = ["webhook_engine*"]
 
 [tool.setuptools.package-data]
 "webhook_engine" = ["py.typed"]
@@ -86,5 +86,5 @@ asyncio_mode = "auto"
 testpaths    = ["tests"]
 
 [tool.coverage.run]
-source = ["libs"]
+source = ["webhook_engine"]
 branch = true

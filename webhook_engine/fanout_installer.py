@@ -14,7 +14,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from libs.shared.logging import get_logger
+from webhook_engine._shared.logging import get_logger
 from webhook_engine.fanout import WebhookFanoutHandler
 from webhook_engine.protocols import (
     SubscriptionReaderProtocol,

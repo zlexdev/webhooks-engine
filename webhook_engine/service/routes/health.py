@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response
 
-from libs.shared.time import now_utc
+from webhook_engine._shared.time import now_utc
 from webhook_engine.service.deps import ServiceDeps, get_deps
 
 __all__ = ["router"]

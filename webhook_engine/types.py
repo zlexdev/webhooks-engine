@@ -1,4 +1,4 @@
-"""Type aliases + small public dataclasses for libs/webhooks.
+"""Type aliases + small public dataclasses for webhook_engine.
 
 Aliases keep service signatures readable without repeating ``str``.
 Dataclasses here are shared across the fanout handler, the Redis store

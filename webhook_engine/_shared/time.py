@@ -1,4 +1,4 @@
-"""UTC clock shim — mirrors the monorepo's libs.shared.time API."""
+"""UTC clock shim, private to the package. Not part of the public API."""
 
 from __future__ import annotations
 

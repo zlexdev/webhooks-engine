@@ -11,7 +11,7 @@ never couples to a concrete datastore.
 
 ## Contract
 
-- `WebhookDeliveryStoreProtocol` (`libs/webhooks/protocols.py`) — the
+- `WebhookDeliveryStoreProtocol` (`webhook_engine/protocols.py`) — the
   delivery-queue ABC: `enqueue_many`, `claim_batch`, `reclaim_stale`,
   `mark_sent` / `schedule_retry` / `mark_dead`, `append_attempt`,
   `get`, `recent_for_subscription`. `BaseWebhookDeliveryStore` in
@@ -19,19 +19,19 @@ never couples to a concrete datastore.
 - `SubscriptionReaderProtocol` — `for_event(event_name, tenant_id)`
   resolves the subscriptions a fan-out should deliver to.
 - All I/O crosses the boundary as `DeliveryRecord` / `AttemptRecord` /
-  `SubscriptionSnapshot` DTOs (`libs/webhooks/types.py`) — never raw
+  `SubscriptionSnapshot` DTOs (`webhook_engine/types.py`) — never raw
   backend rows.
 
 ## Backends
 
 ### `pg.py` — live production store
 
-`PgWebhookDeliveryStore` + `PgSubscriptionReader`. Wired in
-`app/bootstrap/wiring.py` and held on `AppContext`. `libs` stays
-app-agnostic: the app injects a `session_factory` plus repo
+`PgWebhookDeliveryStore` + `PgSubscriptionReader`. The package stays
+host-agnostic: the caller injects a `session_factory` plus repo
 constructors that satisfy `WebhookDeliveryRepoProtocol` /
 `WebhookAttemptRepoProtocol` / `WebhookSubscriptionRepoProtocol`
-(implemented in `app/db/repos/webhook.py`). Each store method opens its
+(the standalone service builds them in `service/pg_repos.py`).
+Each store method opens its
 **own** short transaction — the store owns the session, callers never
 share one. Delivery dedup is the repo's `(subscription_id, event_id)`
 `ON CONFLICT DO NOTHING`; `claim_batch` leases due rows with

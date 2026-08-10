@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from libs.shared.logging import get_logger
+from webhook_engine._shared.logging import get_logger
 
 __all__ = ["run_ingest_loop"]
 

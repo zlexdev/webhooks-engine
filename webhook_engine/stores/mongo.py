@@ -54,7 +54,7 @@ import bson
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import BulkWriteError
 
-from libs.shared.logging import get_logger
+from webhook_engine._shared.logging import get_logger
 from webhook_engine.enums import DeliveryStatus
 from webhook_engine.stores.base import BaseWebhookDeliveryStore
 from webhook_engine.types import AttemptRecord, DeliveryId, DeliveryRecord

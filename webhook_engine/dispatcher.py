@@ -29,8 +29,8 @@ from uuid import uuid4
 
 import httpx
 
-from libs.shared.logging import get_logger
-from libs.shared.time import now_utc
+from webhook_engine._shared.logging import get_logger
+from webhook_engine._shared.time import now_utc
 from webhook_engine.config import WebhookPolicyConfig, WebhookRetryConfig
 from webhook_engine.enums import DeliveryStatus, RetryReason
 from webhook_engine.envelope import WebhookEnvelope

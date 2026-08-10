@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from libs.shared.logging import get_logger
+from webhook_engine._shared.logging import get_logger
 from webhook_engine.enums import DeliveryStatus
 from webhook_engine.exceptions import InvalidWebhookTarget
 from webhook_engine.types import DeliveryRecord

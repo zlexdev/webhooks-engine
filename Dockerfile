@@ -3,7 +3,6 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY pyproject.toml .
-COPY libs/ libs/
 COPY webhook_engine/ webhook_engine/
 
 # Install both DB backends; pick one at runtime via WHE_BACKEND. The optional

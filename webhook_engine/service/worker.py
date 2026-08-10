@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from libs.shared.logging import get_logger
+from webhook_engine._shared.logging import get_logger
 from webhook_engine.engine import WebhookEngine
 
 __all__ = ["run_tick_loop"]

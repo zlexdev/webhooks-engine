@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import httpx
 from fastapi import Request
 
-from libs.shared.time import now_utc
+from webhook_engine._shared.time import now_utc
 from webhook_engine.config import (
     WebhookDispatchConfig,
     WebhookPolicyConfig,

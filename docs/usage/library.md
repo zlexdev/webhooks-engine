@@ -6,9 +6,10 @@ embed the core directly. You own the tick loop; the library owns delivery.
 ## Minimal wiring
 
 ```python
+from datetime import UTC, datetime
+
 from redis.asyncio import Redis
 
-from libs.shared.time import now_utc
 from webhook_engine import (
     WebhookEngine, WebhookDispatcher, RedisWebhookDeliveryStore,
     HmacSigner, HttpxSender, DeliveryPolicy, HostSemaphorePool,
@@ -19,6 +20,9 @@ cfg = WebhookPolicyConfig()
 redis = Redis.from_url("redis://localhost:6379/0")
 store = RedisWebhookDeliveryStore(redis, WebhookStorageConfig())
 
+def now_utc() -> datetime:          # any zero-arg () -> aware datetime works
+    return datetime.now(UTC)
+
 dispatcher = WebhookDispatcher(
     signer=HmacSigner(),
     http_sender=HttpxSender(cfg),
@@ -26,7 +30,7 @@ dispatcher = WebhookDispatcher(
     config=cfg,
     store=store,
     secret_reader=my_secret_reader,        # your SecretReaderProtocol impl
-    ssrf_guard=UrlSafetyValidator(cfg.security.blocked_cidrs),
+    ssrf_guard=UrlSafetyValidator(cfg.security),
     host_sem=HostSemaphorePool(cfg.limits.per_host_concurrency),
     clock=now_utc,
 )

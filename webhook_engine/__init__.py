@@ -1,8 +1,8 @@
 """Durable, signed, per-tenant webhook delivery.
 
 Public API: opt-in marker + registry + fan-out + helpers. Concrete
-I/O (Redis queue, HTTP sender, Mongo reader) lives under
-``libs/webhooks/stores/`` and ``api/services/webhooks/``.
+I/O (Redis / Postgres queue, HTTP sender, Mongo reader) lives under
+``webhook_engine/stores/`` and ``webhook_engine/service/``.
 """
 
 from webhook_engine.config import (
