@@ -41,9 +41,9 @@ from webhook_engine.protocols import (
     Clock,
     HttpSenderProtocol,
     SecretReaderProtocol,
+    SignerProtocol,
     WebhookDeliveryStoreProtocol,
 )
-from webhook_engine.signer import HmacSigner
 from webhook_engine.ssrf_guard import UrlSafetyValidator
 from webhook_engine.types import AttemptRecord, DeliveryRecord, DispatchOutcome, HttpSendResult
 
@@ -64,7 +64,7 @@ class WebhookDispatcher:
     def __init__(
         self,
         *,
-        signer: HmacSigner,
+        signer: SignerProtocol,
         http_sender: HttpSenderProtocol,
         policy: DeliveryPolicy,
         config: WebhookPolicyConfig,

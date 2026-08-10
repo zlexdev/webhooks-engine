@@ -8,44 +8,27 @@ is used on verify for constant-time comparison.
 Signing happens at send-time in the dispatcher (not at enqueue), so
 a record sitting in retry backoff never arrives with a stale
 timestamp.
+
+This is the *default* signer, not the only one — the dispatcher takes
+any :class:`~webhook_engine.protocols.SignerProtocol`.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
-from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from webhook_engine.enums import SignatureVersion
 from webhook_engine.envelope import sha256_hex
 from webhook_engine.exceptions import SignatureVerificationError
+from webhook_engine.protocols import SignerProtocol
+from webhook_engine.types import SignatureHeaders
 
 __all__ = ["HmacSigner", "SignatureHeaders"]
 
 
-@dataclass(frozen=True, slots=True)
-class SignatureHeaders:
-    webhook_id: str
-    webhook_event: str
-    webhook_event_id: str
-    webhook_timestamp: str
-    webhook_signature: str
-
-    def as_dict(self) -> dict[str, str]:
-        return {
-            "Webhook-Id": self.webhook_id,
-            "Webhook-Event": self.webhook_event,
-            # event_id is part of the signed message — the receiver needs it
-            # to reconstruct the MAC, so it must travel in a header.
-            "Webhook-Event-Id": self.webhook_event_id,
-            "Webhook-Timestamp": self.webhook_timestamp,
-            "Webhook-Signature": self.webhook_signature,
-            "Content-Type": "application/json",
-        }
-
-
-class HmacSigner:
+class HmacSigner(SignerProtocol):
     def __init__(self, version: SignatureVersion = SignatureVersion.V1) -> None:
         self._version = version
 

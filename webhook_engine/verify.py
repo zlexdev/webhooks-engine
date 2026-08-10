@@ -30,6 +30,11 @@ import hashlib
 import hmac
 import time
 from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from webhook_engine.protocols import SignerProtocol
 
 __all__ = ["DEFAULT_WINDOW_S", "WebhookVerificationError", "verify_webhook"]
 
@@ -48,6 +53,34 @@ def _header(headers: Mapping[str, str], name: str) -> str:
     return lowered.get(name.lower(), "")
 
 
+def _verify_via_signer(
+    *,
+    signer: SignerProtocol,
+    secret: str,
+    body: bytes,
+    headers: Mapping[str, str],
+    now_ts: int | None,
+    window_s: int,
+) -> None:
+    # The engine's own error type is imported here, not at module scope, so a
+    # receiver that never passes `signer` keeps this module dependency-free.
+    from webhook_engine.exceptions import SignatureVerificationError
+
+    current = now_ts if now_ts is not None else int(time.time())
+    try:
+        signer.verify(
+            body=body,
+            headers=dict(headers),
+            secret=secret,
+            now=datetime.fromtimestamp(current, tz=UTC),
+            window_s=window_s,
+        )
+    except SignatureVerificationError as exc:
+        # One error surface for receivers: whichever signer rejected it, the
+        # caller catches WebhookVerificationError and returns 401.
+        raise WebhookVerificationError(str(exc)) from exc
+
+
 def verify_webhook(
     *,
     secret: str,
@@ -55,6 +88,7 @@ def verify_webhook(
     headers: Mapping[str, str],
     now_ts: int | None = None,
     window_s: int = DEFAULT_WINDOW_S,
+    signer: SignerProtocol | None = None,
 ) -> None:
     """Validate an incoming webhook delivery in constant time.
 
@@ -64,7 +98,23 @@ def verify_webhook(
 
     ``now_ts`` defaults to the current POSIX seconds; pass an explicit value
     in tests to make the freshness window deterministic.
+
+    ``signer`` mirrors ``WebhookDispatcher(signer=...)``: pass the same
+    :class:`~webhook_engine.protocols.SignerProtocol` the sender was built
+    with and this function checks *that* scheme instead of the built-in one.
+    Left ``None`` (the default) it stays dependency-free and verifies the
+    shipped ``v1=`` HMAC inline, importing nothing from the engine.
     """
+    if signer is not None:
+        return _verify_via_signer(
+            signer=signer,
+            secret=secret,
+            body=body,
+            headers=headers,
+            now_ts=now_ts,
+            window_s=window_s,
+        )
+
     ts_raw = _header(headers, "Webhook-Timestamp")
     event_id = _header(headers, "Webhook-Event-Id")
     sig = _header(headers, "Webhook-Signature")

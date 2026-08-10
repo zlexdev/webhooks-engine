@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 __all__ = [
     "AttemptRecord",
@@ -24,6 +24,8 @@ __all__ = [
     "OwnerId",
     "ResolvedTarget",
     "SecretToken",
+    "SignatureHeaders",
+    "SignedHeaders",
     "SubscriptionId",
     "SubscriptionSnapshot",
 ]
@@ -93,6 +95,43 @@ class DispatchOutcome:
     status: DeliveryStatus
     next_fire_at: datetime | None
     attempt: AttemptRecord
+
+
+@runtime_checkable
+class SignedHeaders(Protocol):
+    """What a signer hands back: the outbound headers for one delivery.
+
+    Structural on purpose — ``as_dict`` is the only thing the dispatcher ever
+    calls, so a custom :class:`~webhook_engine.protocols.SignerProtocol`
+    returns its *own* type carrying its own header names
+    (``X-Hub-Signature-256``, ``Stripe-Signature``, …) and inherits nothing
+    from this package.
+    """
+
+    def as_dict(self) -> dict[str, str]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SignatureHeaders:
+    """The shipped ``Webhook-*`` header set — what :class:`HmacSigner` returns."""
+
+    webhook_id: str
+    webhook_event: str
+    webhook_event_id: str
+    webhook_timestamp: str
+    webhook_signature: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "Webhook-Id": self.webhook_id,
+            "Webhook-Event": self.webhook_event,
+            # event_id is part of the signed message — the receiver needs it
+            # to reconstruct the MAC, so it must travel in a header.
+            "Webhook-Event-Id": self.webhook_event_id,
+            "Webhook-Timestamp": self.webhook_timestamp,
+            "Webhook-Signature": self.webhook_signature,
+            "Content-Type": "application/json",
+        }
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,9 +1,10 @@
 """Protocol contracts — services don't couple to redis / httpx.
 
 Concrete implementations live elsewhere:
-- :class:`WebhookDeliveryStoreProtocol` → ``webhook_engine/stores/redis.py``
-- :class:`HttpSenderProtocol` → ``api/services/webhooks/http_sender.py``
-- :class:`SubscriptionReaderProtocol` → ``api/services/webhooks/subscription_reader.py``
+- :class:`WebhookDeliveryStoreProtocol` → ``webhook_engine/stores/``
+- :class:`HttpSenderProtocol` → ``webhook_engine/http_sender.py``
+- :class:`SubscriptionReaderProtocol` → ``webhook_engine/service/subscription_store.py``
+- :class:`SignerProtocol` → ``webhook_engine/signer.py`` (the shipped default)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from webhook_engine.types import (
     DeliveryId,
     DeliveryRecord,
     HttpSendResult,
+    SignedHeaders,
     SubscriptionSnapshot,
 )
 
@@ -27,6 +29,7 @@ __all__ = [
     "HttpSenderProtocol",
     "SecretMaterial",
     "SecretReaderProtocol",
+    "SignerProtocol",
     "SubscriptionReaderProtocol",
     "WebhookDeliveryStoreProtocol",
 ]
@@ -107,6 +110,47 @@ class SubscriptionReaderProtocol(ABC):
         event_name: str,
         tenant_id: str | None,
     ) -> list[SubscriptionSnapshot]: ...
+
+
+class SignerProtocol(ABC):
+    """How a delivery is signed — and how a receiver checks that signature.
+
+    The shipped :class:`~webhook_engine.signer.HmacSigner` produces
+    ``v1=<hmac>`` over ``"<ts>.<event_id>.<sha256(body)>"`` under ``Webhook-*``
+    headers. That is a *default*, not the contract: a host migrating off its
+    own delivery code substitutes its existing scheme here — the GitHub /
+    Stripe style ``sha256=<hex>`` over the raw body, a legacy format, a future
+    ``v2`` — without touching the dispatcher.
+
+    Both directions live on one protocol on purpose. A verifier that does not
+    match its signer is the failure this seam exists to prevent, and two
+    separate protocols would let them drift apart silently.
+    """
+
+    @abstractmethod
+    def sign(
+        self,
+        *,
+        delivery_id: str,
+        event_name: str,
+        event_id: str,
+        body: bytes,
+        secret: str,
+        now: datetime,
+    ) -> SignedHeaders: ...
+
+    @abstractmethod
+    def verify(
+        self,
+        *,
+        body: bytes,
+        headers: dict[str, str],
+        secret: str,
+        now: datetime,
+        window_s: int,
+    ) -> None:
+        """Raise :class:`~webhook_engine.exceptions.SignatureVerificationError`
+        on any mismatch; return ``None`` on success."""
 
 
 class SecretReaderProtocol(ABC):

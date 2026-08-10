@@ -61,6 +61,7 @@ from webhook_engine.protocols import (
     HttpSenderProtocol,
     SecretMaterial,
     SecretReaderProtocol,
+    SignerProtocol,
     SubscriptionReaderProtocol,
     WebhookDeliveryStoreProtocol,
 )
@@ -74,6 +75,7 @@ from webhook_engine.types import (
     DispatchOutcome,
     HttpSendResult,
     ResolvedTarget,
+    SignedHeaders,
     SubscriptionSnapshot,
 )
 from webhook_engine.verify import WebhookVerificationError, verify_webhook
@@ -116,6 +118,8 @@ __all__ = [
     "SignatureHeaders",
     "SignatureVerificationError",
     "SignatureVersion",
+    "SignedHeaders",
+    "SignerProtocol",
     "SubscriptionLimitExceeded",
     "SubscriptionNotFound",
     "SubscriptionReaderProtocol",
