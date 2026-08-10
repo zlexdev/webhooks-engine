@@ -54,7 +54,7 @@ log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 class MongoSubscriptionStore:
     """CRUD for subscriptions backed by a MongoDB collection (Motor)."""
 
-    def __init__(self, collection: AsyncIOMotorCollection) -> None:
+    def __init__(self, collection: AsyncIOMotorCollection[Any]) -> None:
         self._col = collection
 
     async def ensure_schema(self) -> None:

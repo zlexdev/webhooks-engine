@@ -29,8 +29,6 @@ python scripts/install.py --backend pg \
 webhook-engine                                           # serves on :8080
 ```
 
-> ⚠ **This project is largely vibe-coded.** Much of it was generated rather than hand-written and battle-tested. Treat it as a strong starting point, not production-hardened software: read the code, run the tests, and validate the delivery / security paths against your own requirements before relying on it.
-
 ## What it does
 
 Your services already write to a database. `webhook-engine` turns that into webhook delivery: a producer inserts an **event row** (predefined schema) into the events table/collection — or POSTs it to `/v1/emit` — and the engine does the rest. It looks up every active subscription for that event, builds one durable delivery per subscriber, signs it (HMAC-SHA256), and POSTs it with exponential-backoff retries and dead-lettering. Everything — events, subscriptions, the delivery queue — lives in one database (all-Postgres or all-Mongo), so there is no extra moving part to operate.

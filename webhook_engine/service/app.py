@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 
 import uvicorn
 from fastapi import FastAPI
@@ -22,6 +24,15 @@ from webhook_engine.service.routes.health import router as health_router
 from webhook_engine.service.routes.subscriptions import router as sub_router
 from webhook_engine.service.settings import Settings
 from webhook_engine.service.worker import run_tick_loop
+
+
+def _version() -> str:
+    # Read from installed metadata, not a literal: a second copy of the version
+    # drifts, and the one in /openapi.json is what an operator trusts.
+    try:
+        return pkg_version("webhook-engine")
+    except PackageNotFoundError:
+        return "0+unknown"
 
 __all__ = ["create_app", "main"]
 
@@ -47,7 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Webhook Engine",
         description="Durable, signed, per-tenant webhook delivery microservice",
-        version="0.1.0",
+        version=_version(),
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",

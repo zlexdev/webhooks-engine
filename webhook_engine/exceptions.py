@@ -42,7 +42,7 @@ class WebhookError(Exception):
     status_code: int = 500
     error_code: str = "WEBHOOK_ERROR"
 
-    def __init__(self, message: str = "", **context: Any) -> None:
+    def __init__(self, message: str = "", **context: Any) -> None:  # noqa: ANN401 - log context is arbitrary by contract
         super().__init__(message)
         for key, value in context.items():
             setattr(self, key, value)

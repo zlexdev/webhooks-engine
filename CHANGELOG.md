@@ -6,6 +6,19 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-10
+
+First tagged release — `0.1.0` was documented but never tagged.
+
+### Breaking
+- `libs.shared.logging` / `libs.shared.time` are gone; the shims live at
+  `webhook_engine._shared.*` and the `libs` package is no longer installed.
+  Anything importing `libs.shared` breaks at import. Nothing else did, or
+  should have — it is private now, and named so.
+- `HmacSigner.verify` / `verify_webhook` now reject a signature whose version
+  label is missing or not `v1`. A correctly produced `v1=<mac>` is unaffected;
+  a bare mac with no label used to pass and no longer does.
+
 ### Added
 - **`SignerProtocol`** — the signature scheme is substitutable; `HmacSigner` stays the default. A host keeps the format its receivers already verify (GitHub/Stripe-style `sha256=<hex>`, a legacy scheme, a future `v2`) instead of subclassing `HmacSigner`. Headers travel as a structural `SignedHeaders` (anything with `as_dict()`), so a custom signer names its own headers and inherits nothing from this package. `verify_webhook(signer=...)` mirrors it on the receiving side.
 - **`WebhookEngine(on_outcome=...)`** — per-delivery `DispatchOutcome` (including what the receiver answered, `attempt.response_snippet`) instead of counters only. Runs after the delivery is committed and outside the concurrency gate, under `dispatch.on_outcome_timeout_s`; a callback that hangs or raises is logged and cannot affect the delivery.

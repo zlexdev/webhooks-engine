@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # The pg + mongo extras are installed for the type-check, not for the
+      # tests: without motor / pymongo on the path mypy reports missing stubs
+      # for the optional backends and the run is red for the wrong reason.
+      # The `bus` extra is deliberately absent — asyncbus is private, and
+      # pyproject already tells mypy to ignore it.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[pg,mongo,dev]"
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Mypy
+        run: mypy webhook_engine
+
+      # Only the unit suite. tests/test_smoke_e2e.py talks to a running service
+      # and skips itself when there is none — in CI that would be an all-skipped
+      # green, which proves nothing. It runs against a real deployment instead.
+      - name: Tests
+        run: pytest tests/unit -q
