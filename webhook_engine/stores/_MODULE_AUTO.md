@@ -43,12 +43,16 @@ cls MemoryWebhookDeliveryStore(BaseWebhookDeliveryStore)
 _CLAIMABLE = …
 
 cls MongoWebhookDeliveryStore(BaseWebhookDeliveryStore)
+  # Motor-based delivery store — one MongoDB collection, embedded attempt log.
   __init__(collection: AsyncIOMotorCollection[Any, attempts_limit: int = 20) -> None
   async ensure_schema() -> None
+    # Create indexes required for polling, leasing, and subscription queries.
   async enqueue_many(records: list[DeliveryRecord) -> None
     # Insert delivery records, ignoring duplicates (idempotent by _id).
   async claim_batch(now: datetime, lease_ttl_s: int, batch_size: int) -> list[DeliveryRecord]
+    # Atomically lease up to *batch_size* ready deliveries.
   async reclaim_stale(now: datetime) -> int
+    # Reset IN_FLIGHT deliveries whose lease has expired back to PENDING.
   async mark_sent(delivery_id: DeliveryId, attempt: AttemptRecord) -> None
     # Transition delivery to SENT and append the final attempt record.
   async schedule_retry(delivery_id: DeliveryId, fire_at: datetime, attempt: AttemptRecord) -> None
@@ -56,6 +60,7 @@ cls MongoWebhookDeliveryStore(BaseWebhookDeliveryStore)
   async mark_dead(delivery_id: DeliveryId, attempt: AttemptRecord) -> None
     # Transition delivery to DEAD_LETTERED and record the final attempt.
   async append_attempt(delivery_id: DeliveryId, attempt: AttemptRecord) -> None
+    # Append an attempt record without changing delivery status.
   async get(delivery_id: DeliveryId) -> DeliveryRecord | None
     # Fetch a single delivery record by id, or ``None`` if not found.
   async recent_for_subscription(sub_id: str, limit: int) -> list[DeliveryRecord]

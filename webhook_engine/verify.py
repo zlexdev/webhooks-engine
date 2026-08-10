@@ -79,6 +79,12 @@ def _verify_via_signer(
         # One error surface for receivers: whichever signer rejected it, the
         # caller catches WebhookVerificationError and returns 401.
         raise WebhookVerificationError(str(exc)) from exc
+    except WebhookVerificationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a third-party signer may raise anything
+        # Without this a custom signer's own error type escapes as a 500, the
+        # sender reads 5xx as "retry", and a forged payload gets retried.
+        raise WebhookVerificationError(f"{exc.__class__.__name__}: {exc}") from exc
 
 
 def verify_webhook(
@@ -136,6 +142,10 @@ def verify_webhook(
         f"{ts}.{event_id}.{digest}".encode(),
         hashlib.sha256,
     ).hexdigest()
-    provided = sig.split("=", 1)[1] if "=" in sig else sig
+    version, _, provided = sig.partition("=")
+    # Same rule as HmacSigner.verify — the two must not drift: a bare mac with
+    # no version label, or a label this build does not implement, is a reject.
+    if version != "v1" or not provided:
+        raise WebhookVerificationError("unsupported signature version")
     if not hmac.compare_digest(expected, provided):
         raise WebhookVerificationError("signature mismatch")

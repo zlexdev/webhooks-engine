@@ -9,8 +9,9 @@ Hot path, per record:
 1. Body-size guard (payload too large → dead-letter, no network I/O).
 2. Resolve current + previous secret via :class:`SecretReaderProtocol`
    (TTL cache; rotation propagates within the window).
-3. Re-check the pinned ``resolved_ip`` against the CIDR block set —
-   catches DNS rebinding that happened between enqueue and send.
+3. Pick the target address (pinned ``resolved_ip``, or a fresh one if a
+   ``TargetResolverProtocol`` was supplied) and re-check it against the
+   CIDR block set — catches DNS rebinding between enqueue and send.
 4. Build :class:`WebhookEnvelope`, sign at *now*, POST under the
    per-host bulkhead.
 5. Classify + mark — success / scheduled retry / dead-letter.
@@ -42,6 +43,7 @@ from webhook_engine.protocols import (
     HttpSenderProtocol,
     SecretReaderProtocol,
     SignerProtocol,
+    TargetResolverProtocol,
     WebhookDeliveryStoreProtocol,
 )
 from webhook_engine.ssrf_guard import UrlSafetyValidator
@@ -74,6 +76,7 @@ class WebhookDispatcher:
         host_sem: HostSemaphorePool,
         clock: Clock,
         bus: BaseEventBus | None = None,
+        resolver: TargetResolverProtocol | None = None,
     ) -> None:
         self._signer = signer
         self._sender = http_sender
@@ -85,6 +88,7 @@ class WebhookDispatcher:
         self._host_sem = host_sem
         self._clock = clock
         self._bus = bus
+        self._resolver = resolver
         self._log = get_logger("webhooks.dispatcher")
 
     async def send(self, record: DeliveryRecord) -> DispatchOutcome:
@@ -92,6 +96,9 @@ class WebhookDispatcher:
         now = self._clock()
         limits = self._config.limits
         retry_cfg = self._retry_config(record)
+        parsed_target = urlsplit(record.target_url)
+        host = parsed_target.hostname or ""
+        target_port = parsed_target.port or (443 if parsed_target.scheme == "https" else 80)
 
         if len(record.data_json) > limits.max_body_bytes:
             return await self._dead_letter(
@@ -105,8 +112,9 @@ class WebhookDispatcher:
                 response_snippet="",
             )
 
+        target_ip = await self._current_ip(record, host)
         try:
-            self._ssrf.check_ip(record.resolved_ip)
+            self._ssrf.check_ip(target_ip, host=host, port=target_port)
         except InvalidWebhookTarget as exc:
             return await self._dead_letter(
                 record,
@@ -140,7 +148,6 @@ class WebhookDispatcher:
             )
 
         signed = self._build_signed(record, secret.current, attempt_no, now)
-        host = urlsplit(record.target_url).hostname or ""
 
         send_result: HttpSendResult | None = None
         retry_reason: RetryReason | None = None
@@ -152,7 +159,7 @@ class WebhookDispatcher:
                     url=record.target_url,
                     body=signed.body,
                     headers=signed.headers,
-                    resolved_ip=record.resolved_ip,
+                    resolved_ip=target_ip,
                     connect_timeout_s=limits.http_connect_timeout_s,
                     read_timeout_s=limits.http_read_timeout_s,
                     total_timeout_s=limits.http_total_timeout_s,
@@ -194,6 +201,27 @@ class WebhookDispatcher:
             attempt,
             retry_reason=retry_reason,
         )
+
+    async def _current_ip(self, record: DeliveryRecord, host: str) -> str:
+        """The address this attempt will POST to.
+
+        The pinned ``record.resolved_ip`` unless a resolver was supplied and
+        answers. Whatever comes back is still handed to ``check_ip`` by the
+        caller — a resolver cannot talk the dispatcher into a blocked address.
+        """
+        if self._resolver is None or not host:
+            return record.resolved_ip
+        try:
+            fresh = await self._resolver.resolve(host)
+        except Exception as exc:  # noqa: BLE001 - a dead resolver must not kill the retry
+            self._log.warn(
+                "resolve_failed",
+                delivery_id=record.delivery_id,
+                host=host,
+                error=str(exc),
+            )
+            return record.resolved_ip
+        return fresh or record.resolved_ip
 
     def _retry_config(self, record: DeliveryRecord) -> WebhookRetryConfig:
         _ = record  # reserved for per-subscription retry overrides

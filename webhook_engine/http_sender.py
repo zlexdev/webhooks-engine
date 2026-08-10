@@ -114,5 +114,8 @@ class HttpxSender:
             netloc = f"{netloc}:{port}"
         pinned = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
         new_headers = dict(headers)
-        new_headers.setdefault("Host", parsed.netloc)
+        # Assignment, not setdefault: the connection is pinned to resolved_ip, so
+        # Host belongs to the transport. A signer that returned its own Host
+        # would otherwise redirect the request at a vhost of its choosing.
+        new_headers["Host"] = parsed.netloc
         return pinned, new_headers, host

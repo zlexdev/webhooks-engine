@@ -5,7 +5,7 @@
 
 ## Submodules
 
-- [`routes/`](routes\_MODULE_AUTO.md) (4 py, 8 cls, 19 fn)
+- [`routes/`](routes/_MODULE_AUTO.md) (4 py, 10 cls, 20 fn)
 
 ## __init__.py
 ```
@@ -36,7 +36,11 @@ cls DeliveryAdminService
   async list_for_subscription(sub_id: str, limit: int) -> list[DeliveryRecord]
   async get(delivery_id: str) -> DeliveryRecord
   async redeliver(delivery_id: str) -> DeliveryRecord
+    # Clone a past delivery and re-queue it as a fresh attempt.
   async ping(sub_id: str) -> DeliveryRecord
+    # Queue a synthetic ``webhook.ping`` delivery so a subscriber can
+
+_check_target(ssrf: UrlSafetyValidator, resolved_ip: str, url: str) -> None
 
 ```
 
@@ -67,6 +71,7 @@ async _build_pg(settings: Settings) -> _Backends
 async _build_mongo(settings: Settings) -> _Backends
 
 async _build_memory(settings: Settings) -> _Backends
+  # Dependency-free backend for dev and tests — no Postgres/Mongo/Redis needed.
 
 get_deps(request: Request) -> ServiceDeps
 
@@ -88,10 +93,12 @@ async run_ingest_loop(ingestor: EventIngestor, poll_interval_s: float) -> None
 _SAFE_IDENTIFIER_RE = re.compile('^[a-zA-Z_][a-zA-Z0-9_]{0,62}$')
 
 cls PgDeliveryRepo(WebhookDeliveryRepoProtocol)
+  # SQLAlchemy-async ``text()`` implementation of :class:`WebhookDeliveryRepoProtocol`.
   __init__(session: AsyncSession, table: str) -> None
   async enqueue_many(records: Sequence[DeliveryRecord) -> int
     # Bulk-insert *records* as PENDING; duplicate delivery_id is a no-op.
   async claim_batch() -> Sequence[DeliveryRecord]
+    # Atomically claim up to *batch_size* claimable deliveries.
   async reclaim_stale() -> int
     # Return expired in_flight rows (lease_expiry < now) back to pending.
   async mark_sent(delivery_id: str, attempt: AttemptRecord) -> None
@@ -108,6 +115,7 @@ cls PgDeliveryRepo(WebhookDeliveryRepoProtocol)
     # Return the most-recent *limit* deliveries for *sub_id*, newest first.
 
 cls PgAttemptRepo(WebhookAttemptRepoProtocol)
+  # SQLAlchemy-async ``text()`` implementation of :class:`WebhookAttemptRepoProtocol`.
   __init__(session: AsyncSession, table: str) -> None
   async append(delivery_id: str, attempt: AttemptRecord) -> None
     # Insert one attempt row; duplicate (delivery_id, attempt) is a no-op.
@@ -121,8 +129,10 @@ _row_to_delivery(row: object) -> DeliveryRecord
   # Map a SQLAlchemy ``Row`` to :class:`DeliveryRecord`.
 
 async ensure_delivery_schema(engine: AsyncEngine, deliveries_table: str, attempts_table: str) -> None
+  # CREATE TABLE IF NOT EXISTS for deliveries + attempts, plus all indexes.
 
 make_pg_delivery_store(engine: AsyncEngine, deliveries_table: str, attempts_table: str) -> PgWebhookDeliveryStore
+  # Build a fully-wired :class:`PgWebhookDeliveryStore` from an engine.
 
 ```
 
@@ -132,6 +142,7 @@ make_pg_delivery_store(engine: AsyncEngine, deliveries_table: str, attempts_tabl
 
 
 cls Page(BaseModel)
+  # Offset page returned by every collection endpoint — never a bare list.
 
 ```
 
@@ -157,6 +168,7 @@ cls MongoSubscriptionStore
   async ensure_schema() -> None
     # Create indexes on the collection (idempotent).
   async for_event(event_name: str, _tenant_id: str?) -> list[SubscriptionSnapshot]
+    # Return active subscriptions interested in *event_name*.
   async get_secret(subscription_id: str) -> SecretMaterial
   invalidate_secret(_subscription_id: str) -> None
     # No-op — Mongo store has no in-process secret cache.
@@ -191,10 +203,12 @@ _DEFAULT_TABLE = 'wh_subscriptions'
 _IDENT_RE = re.compile('^[A-Za-z_][A-Za-z0-9_$]{0,62}$')
 
 cls PgSubscriptionStore
+  # CRUD for subscriptions backed by a single PostgreSQL table.
   __init__(engine: AsyncEngine, table: str = _DEFAULT_TABLE) -> None
   async ensure_schema() -> None
     # Create the subscriptions table and indexes if they do not exist.
   async for_event(event_name: str, tenant_id: str?) -> list[SubscriptionSnapshot]
+    # Return active subscriptions interested in *event_name*.
   async get_secret(subscription_id: str) -> SecretMaterial
   invalidate_secret(subscription_id: str) -> None
     # No-op — PG store has no in-process secret cache.

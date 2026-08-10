@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     port: int = 8080
     debug: bool = False
 
+    # Hosts allowed to resolve to an address inside the SSRF deny-list — set it
+    # to the compose service name to reach a receiver on the same network
+    # (WHE_TRUSTED_PRIVATE_HOSTS='["receiver"]'). Empty denies every private IP.
+    trusted_private_hosts: tuple[str, ...] = ()
+
     poll_interval_s: float = 1.0
     ingest_poll_interval_s: float = 1.0
     batch_size: int = 50

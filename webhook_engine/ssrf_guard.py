@@ -1,8 +1,12 @@
-"""Pure URL / IP safety checks. No DNS I/O — resolution happens in the
-services-layer ``UrlValidator`` so ``libs/webhooks/`` stays I/O-free.
+"""Pure URL / IP safety checks. No DNS I/O — the caller resolves the host and
+passes the addresses in, so this module stays I/O-free and unit-testable.
 
-Mitigates SSRF via DNS rebinding: resolved IPs are pinned at the
-subscription doc and re-validated on every dispatcher send.
+Mitigates SSRF via DNS rebinding: the resolved IP is pinned when a delivery is
+enqueued and re-validated on every dispatcher send, so a name that flips to a
+private address between the two never gets POSTed to.
+
+Escape hatch: ``security.trusted_private_hosts`` exempts named hosts (a compose
+service, an internal receiver) from the CIDR deny-list. Empty by default.
 """
 
 from __future__ import annotations
@@ -64,22 +68,28 @@ class UrlSafetyValidator:
         self._check_scheme(parsed, env)
         self._check_credentials(parsed)
         self._check_host_allowlist(parsed)
-        self._check_ips(resolved_ips)
         host = parsed.hostname or ""
         default_port = 443 if parsed.scheme == "https" else 80
+        port = parsed.port or default_port
+        self._check_ips(resolved_ips, host=parsed.hostname, port=port)
         return ResolvedTarget(
             host=host,
-            port=parsed.port or default_port,
+            port=port,
             scheme=parsed.scheme,
             ips=tuple(resolved_ips),
         )
 
-    def check_ip(self, ip: str) -> None:
+    def check_ip(self, ip: str, *, host: str | None = None, port: int | None = None) -> None:
         """Re-validation hook used by the dispatcher before POST.
 
         Raises ``InvalidWebhookTarget`` if ``ip`` falls into a blocked
         CIDR range — used as a second line of defence against DNS
         rebinding between subscription-create and dispatch.
+
+        ``host`` / ``port`` are the name and port the address was resolved
+        from. They only ever *relax* the CIDR check, and only for an entry in
+        ``security.trusted_private_hosts``; the address must still parse.
+        Omitting them (the default) keeps the check at full strength.
         """
         try:
             addr = ipaddress.ip_address(ip)
@@ -87,8 +97,13 @@ class UrlSafetyValidator:
             raise InvalidWebhookTarget(
                 InvalidTargetReason.UNRESOLVABLE, f"invalid ip: {ip}"
             ) from exc
-        if self._blocked.contains(addr):
-            raise InvalidWebhookTarget(InvalidTargetReason.PRIVATE_IP, f"blocked ip: {ip}")
+        if not self._blocked.contains(addr):
+            return
+        if host is not None and _is_trusted_private(
+            host, port, self._security.trusted_private_hosts
+        ):
+            return
+        raise InvalidWebhookTarget(InvalidTargetReason.PRIVATE_IP, f"blocked ip: {ip}")
 
     def _check_scheme(self, p: SplitResult, env: str) -> None:
         if p.scheme not in ("http", "https"):
@@ -111,22 +126,68 @@ class UrlSafetyValidator:
         allowed = self._security.allowed_hosts
         if allowed is None:
             return
-        host = (p.hostname or "").lower()
+        host = p.hostname or ""
         if not host:
             raise InvalidWebhookTarget(InvalidTargetReason.BLOCKED_HOST, "missing host")
-        for pattern in allowed:
-            pat = pattern.lower()
-            if pat.startswith("*."):
-                if host.endswith(pat[1:]):
-                    return
-            elif host == pat:
-                return
+        if _host_matches(host, allowed):
+            return
         raise InvalidWebhookTarget(
-            InvalidTargetReason.BLOCKED_HOST, f"host not in allow-list: {host}"
+            InvalidTargetReason.BLOCKED_HOST, f"host not in allow-list: {host.lower()}"
         )
 
-    def _check_ips(self, ips: tuple[str, ...]) -> None:
+    def _check_ips(
+        self, ips: tuple[str, ...], *, host: str | None = None, port: int | None = None
+    ) -> None:
         if not ips:
             raise InvalidWebhookTarget(InvalidTargetReason.UNRESOLVABLE, "no resolved IPs")
         for ip_s in ips:
-            self.check_ip(ip_s)
+            self.check_ip(ip_s, host=host, port=port)
+
+
+def _host_matches(host: str, patterns: tuple[str, ...]) -> bool:
+    """Exact name or ``*.suffix``, case-insensitive. Used by allowed_hosts."""
+    h = _normalise_host(host)
+    for pattern in patterns:
+        pat = pattern.lower()
+        if pat.startswith("*."):
+            if h.endswith(pat[1:]):
+                return True
+        elif h == pat:
+            return True
+    return False
+
+
+def _is_trusted_private(host: str, port: int | None, patterns: tuple[str, ...]) -> bool:
+    """Exact ``host`` or ``host:port``. No wildcards — see the config docstring.
+
+    A portless pattern matches any port on that host; a pattern with a port
+    matches only that port, which is the form to use when the trusted host also
+    runs something you do not want reachable (a database, an admin socket).
+    """
+    h = _normalise_host(host)
+    if not h:
+        return False
+    for pattern in patterns:
+        pat = pattern.lower().strip()
+        if ":" in pat:
+            pat_host, _, pat_port = pat.rpartition(":")
+            if h == pat_host and port is not None and str(port) == pat_port:
+                return True
+        elif h == pat:
+            return True
+    return False
+
+
+def _normalise_host(host: str) -> str:
+    """Lower-case, drop the FQDN trailing dot, fold IDN to its ASCII form.
+
+    Without the fold, "reсeiver" (Cyrillic с) is a different string here and the
+    same name to a resolver — a homograph walks straight past an exact match.
+    """
+    h = host.strip().rstrip(".").lower()
+    try:
+        return h.encode("idna").decode("ascii").lower()
+    except (UnicodeError, ValueError):
+        # Not encodable as IDNA (empty label, over-long, raw underscore) — such
+        # a name cannot match a pattern that IS encodable, so leave it as is.
+        return h

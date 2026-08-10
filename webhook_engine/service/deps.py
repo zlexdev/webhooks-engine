@@ -18,6 +18,7 @@ from webhook_engine._shared.time import now_utc
 from webhook_engine.config import (
     WebhookDispatchConfig,
     WebhookPolicyConfig,
+    WebhookSecurityConfig,
 )
 from webhook_engine.dispatcher import WebhookDispatcher
 from webhook_engine.engine import WebhookEngine
@@ -94,6 +95,9 @@ async def build_deps(settings: Settings) -> ServiceDeps:
             worker_concurrency=settings.worker_concurrency,
             lease_ttl_s=settings.lease_ttl_s,
             drain_timeout_s=settings.drain_timeout_s,
+        ),
+        security=WebhookSecurityConfig(
+            trusted_private_hosts=settings.trusted_private_hosts,
         ),
     )
     ssrf_guard = UrlSafetyValidator(policy_cfg.security)

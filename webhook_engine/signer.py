@@ -67,9 +67,13 @@ class HmacSigner(SignerProtocol):
 
         Raises :class:`SignatureVerificationError` on any mismatch.
         """
-        ts_raw = headers.get("Webhook-Timestamp", "")
-        event_id = headers.get("Webhook-Event-Id", "")
-        sig = headers.get("Webhook-Signature", "")
+        # HTTP header names are case-insensitive and most frameworks hand them
+        # over lower-cased — matching on the exact case would 401 every valid
+        # delivery from a real server.
+        lowered = {k.lower(): v for k, v in headers.items()}
+        ts_raw = lowered.get("webhook-timestamp", "")
+        event_id = lowered.get("webhook-event-id", "")
+        sig = lowered.get("webhook-signature", "")
         if not (ts_raw and sig):
             raise SignatureVerificationError("missing headers")
         try:
@@ -84,6 +88,10 @@ class HmacSigner(SignerProtocol):
             f"{ts}.{event_id}.{sha256_hex(body)}".encode(),
             hashlib.sha256,
         ).hexdigest()
-        provided = sig.split("=", 1)[1] if "=" in sig else ""
+        version, _, provided = sig.partition("=")
+        # Check the version label, not just the mac: without this a future
+        # "v2=<mac>" — or an attacker's "v99=" — is accepted as v1.
+        if version != self._version.value or not provided:
+            raise SignatureVerificationError("unsupported signature version")
         if not hmac.compare_digest(expected, provided):
             raise SignatureVerificationError("bad mac")

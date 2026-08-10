@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from webhook_engine._shared.logging import get_logger
@@ -103,7 +104,12 @@ class EventIngestor:
         records: list[DeliveryRecord] = []
         for sub in subscriptions:
             try:
-                self._ssrf.check_ip(sub.resolved_ip)
+                parsed = urlsplit(sub.url)
+                self._ssrf.check_ip(
+                    sub.resolved_ip,
+                    host=parsed.hostname or None,
+                    port=parsed.port or (443 if parsed.scheme == "https" else 80),
+                )
             except InvalidWebhookTarget:
                 self._log.warn(
                     "ingest_target_blocked",

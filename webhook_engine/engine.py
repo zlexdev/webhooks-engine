@@ -11,13 +11,43 @@ Single-replica contract:
 4. ``drain(timeout_s)`` waits for outstanding tasks on shutdown,
    cancelling anything still running past the deadline.
 
-The app worker (:class:`api.workers.webhook_dispatch.WebhookDispatchWorker`)
-is a thin ``BaseLoopWorker`` that delegates to ``tick()`` / ``drain()``.
+The bundled worker (:mod:`webhook_engine.service.worker`) is a thin loop that
+delegates to ``tick()`` / ``drain()``.
+
+Seeing the result of a delivery
+-------------------------------
+
+``tick()`` returns counters only; the per-delivery :class:`DispatchOutcome` —
+including ``attempt.response_snippet``, i.e. what the receiver answered — would
+otherwise be dropped on the floor. Pass ``on_outcome`` to observe it.
+
+Three rules keep that hook off the hot path, and they are load-bearing:
+
+1. it runs **after** the concurrency semaphore is released, so a slow callback
+   never holds a worker slot against the other records in the batch;
+2. it runs under ``dispatch.on_outcome_timeout_s``;
+3. its failure — timeout or exception — is logged and otherwise invisible. The
+   store transition already happened; a callback cannot undo a delivery, so it
+   must not be able to change the outcome or the tick counters either.
+
+Do not move the call inside the semaphore block "for symmetry" — that is the
+mistake this note exists to prevent.
+
+What rule 1 does *not* buy: ``tick()`` gathers all its tasks, so it still does
+not return until every callback has finished or timed out, and the next batch is
+not claimed before then. Deliveries inside the batch stop waiting on each other;
+the tick as a whole does not.
+
+TODO(debt): nothing validates ``on_outcome_timeout_s < lease_ttl_s`` — proper
+fix: reject the combination in WebhookDispatchConfig — deferred: config
+validation is not wired for any field yet, and the defaults (5s vs 30s) are
+safe. Raise it if either default moves.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from webhook_engine._shared.logging import get_logger
@@ -28,7 +58,9 @@ from webhook_engine.enums import DeliveryStatus
 from webhook_engine.protocols import Clock, WebhookDeliveryStoreProtocol
 from webhook_engine.types import AttemptRecord, DeliveryRecord, DispatchOutcome
 
-__all__ = ["EngineTickStats", "WebhookEngine"]
+__all__ = ["EngineTickStats", "OutcomeCallback", "WebhookEngine"]
+
+OutcomeCallback = Callable[[DeliveryRecord, DispatchOutcome], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,11 +79,13 @@ class WebhookEngine:
         dispatcher: WebhookDispatcher,
         config: WebhookDispatchConfig,
         clock: Clock,
+        on_outcome: OutcomeCallback | None = None,
     ) -> None:
         self._store = store
         self._dispatcher = dispatcher
         self._cfg = config
         self._clock = clock
+        self._on_outcome = on_outcome
         self._gate = asyncio.Semaphore(config.worker_concurrency)
         self._inflight: set[asyncio.Task[DispatchOutcome]] = set()
         self._log = get_logger("webhooks.engine")
@@ -120,7 +154,7 @@ class WebhookEngine:
     async def _dispatch_one(self, record: DeliveryRecord) -> DispatchOutcome:
         async with self._gate:
             try:
-                return await self._dispatcher.send(record)
+                outcome = await self._dispatcher.send(record)
             except Exception as exc:  # noqa: BLE001 - engine shields batch from one bad record
                 self._log.error(
                     "dispatch_unhandled",
@@ -133,6 +167,34 @@ class WebhookEngine:
                 )
                 await self._quarantine(record, exc)
                 raise
+        # Outside the semaphore on purpose — see the module docstring. There is
+        # no outcome on the quarantine path above, so the hook is not called
+        # there: a synthetic one would report a result that never happened.
+        await self._notify(record, outcome)
+        return outcome
+
+    async def _notify(self, record: DeliveryRecord, outcome: DispatchOutcome) -> None:
+        if self._on_outcome is None:
+            return
+        try:
+            await asyncio.wait_for(
+                self._on_outcome(record, outcome),
+                timeout=self._cfg.on_outcome_timeout_s,
+            )
+        except TimeoutError:
+            self._log.warn(
+                "outcome_callback_timeout",
+                delivery_id=record.delivery_id,
+                timeout_s=self._cfg.on_outcome_timeout_s,
+            )
+        except Exception as exc:  # noqa: BLE001 - a host callback cannot break delivery
+            self._log.warn(
+                "outcome_callback_failed",
+                delivery_id=record.delivery_id,
+                error=str(exc),
+                error_type=exc.__class__.__name__,
+                exc_info=True,
+            )
 
     async def _quarantine(self, record: DeliveryRecord, exc: BaseException) -> None:
         """Best-effort salvage for an unhandled dispatcher exception.
@@ -189,7 +251,7 @@ class WebhookEngine:
                 asyncio.gather(*self._inflight, return_exceptions=True),
                 timeout=timeout_s,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._log.warn(
                 "drain_timeout",
                 remaining=len(self._inflight),

@@ -34,6 +34,10 @@ class WebhookSecurityConfig:
     require_https_in_prod: bool = True
     allow_http_in_dev: bool = True
     blocked_cidrs: tuple[str, ...] = (
+        # "this host" — 0.0.0.0 and :: reach the local machine on Linux and are
+        # not covered by the loopback ranges below.
+        "0.0.0.0/32",
+        "::/128",
         "127.0.0.0/8",
         "10.0.0.0/8",
         "172.16.0.0/12",
@@ -47,6 +51,19 @@ class WebhookSecurityConfig:
     )
     # Opt-in host allow-list. None = only deny-list applies.
     allowed_hosts: tuple[str, ...] | None = None
+    # Hosts whose resolved address may fall inside blocked_cidrs. This is NOT
+    # an SSRF off-switch: it is a per-NAME exemption, so a compose service
+    # ("receiver", "receiver:9000") is reachable on a private IP while every
+    # other host is still denied one. Empty — the default — changes nothing.
+    #
+    # It exists because the alternative is deleting a range from blocked_cidrs,
+    # which drops the guard for every host at once.
+    #
+    # Entries are exact "host" or "host:port". No wildcards, deliberately: the
+    # target URL is tenant-supplied, so "*.svc.cluster.local" would hand over
+    # the whole internal zone to whoever registers a subscription. A portless
+    # entry trusts EVERY port on that host — name the port unless you mean it.
+    trusted_private_hosts: tuple[str, ...] = ()
     preflight_enabled: bool = True
     preflight_timeout_s: float = 3.0
     signature_window_s: int = 300
@@ -87,6 +104,10 @@ class WebhookDispatchConfig:
     # Graceful-shutdown deadline — engine.drain() awaits in-flight
     # deliveries up to this long before cancelling.
     drain_timeout_s: float = 10.0
+    # Deadline for the optional WebhookEngine(on_outcome=...) hook. A host
+    # callback that hangs must not hold a worker slot forever; on timeout the
+    # engine logs and moves on — the delivery is already committed by then.
+    on_outcome_timeout_s: float = 5.0
 
 
 @dataclass(frozen=True, slots=True)

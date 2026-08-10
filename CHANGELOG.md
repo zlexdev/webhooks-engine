@@ -7,6 +7,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`SignerProtocol`** — the signature scheme is substitutable; `HmacSigner` stays the default. A host keeps the format its receivers already verify (GitHub/Stripe-style `sha256=<hex>`, a legacy scheme, a future `v2`) instead of subclassing `HmacSigner`. Headers travel as a structural `SignedHeaders` (anything with `as_dict()`), so a custom signer names its own headers and inherits nothing from this package. `verify_webhook(signer=...)` mirrors it on the receiving side.
+- **`WebhookEngine(on_outcome=...)`** — per-delivery `DispatchOutcome` (including what the receiver answered, `attempt.response_snippet`) instead of counters only. Runs after the delivery is committed and outside the concurrency gate, under `dispatch.on_outcome_timeout_s`; a callback that hangs or raises is logged and cannot affect the delivery.
+- **`WebhookSecurityConfig.trusted_private_hosts`** — exempt a *named* host from `blocked_cidrs` (`WHE_TRUSTED_PRIVATE_HOSTS`), so a receiver on a Docker/Kubernetes network is reachable without deleting a whole range from the deny-list. Entries are exact `host` or `host:port`; no wildcards, because the target URL is tenant-supplied.
+- **`TargetResolverProtocol`** — optional per-attempt DNS re-resolution. Pinning stays the default; with a resolver, a receiver that moved mid-retry-ladder is still reachable. The returned address passes the same `check_ip` and is the one actually POSTed to.
 - **Ingestion layer** — producers write events to a shared DB; the engine reads and fans out.
   - `BaseEventStore` seam + `IncomingEvent` contract + `EventIngestStatus`.
   - `PgEventStore` (`FOR UPDATE SKIP LOCKED`) and `MongoEventStore` (`find_one_and_update`) backends.
@@ -20,13 +24,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`scripts/install.py`** — one-command `.env` generator with unique timestamped table names.
 - **`scripts/fix_imports.py`** — migrated the package from the `libs.webhooks` monorepo alias to a self-named `webhook_engine` package.
 
+### Security
+- `0.0.0.0` and `::` were not in `blocked_cidrs` — both reach the local machine on Linux and neither falls inside the loopback ranges. A subscription pointing at `http://0.0.0.0:<port>/` reached the worker's own services with no configuration needed.
+- `HmacSigner.verify` accepted any version label: `v99=<valid v1 mac>` verified as `v1`. The label is now checked, in both `HmacSigner.verify` and `verify_webhook`; a bare mac with no label is rejected rather than accepted.
+- The `Host` header sent alongside a pinned IP was set with `setdefault`, so a signer's headers could override it and redirect the request at a vhost of its choosing. It is now assigned by the transport.
+
 ### Fixed
+- `HmacSigner.verify` matched header names case-sensitively and so rejected every valid delivery from a real HTTP server, which lower-cases them.
+- `redis[asyncio]` requested an extra that no longer exists (`redis>=4.2` ships the async client in the base package) — resolvers warned, and warnings become errors.
+- `docs/usage/library.md` listed `SubscriptionReaderProtocol` as required; neither `WebhookDispatcher` nor `WebhookEngine` takes one — it is needed only for `[bus]` fan-out. The same page's `UrlSafetyValidator(...)` example passed the wrong argument type.
 - **Signature verification was impossible**: `HmacSigner` signed over `event_id` but never emitted it in a header. Added the `Webhook-Event-Id` header so receivers can reconstruct the MAC.
 - `MemoryWebhookDeliveryStore.reclaim_stale` reclaimed actively-dispatching records (used `fire_at` instead of a tracked lease expiry) — would have caused double-delivery.
 - `RedisSubscriptionStore.pause`/`resume` always returned `True` even for a missing subscription (the PG/Mongo ports return a real boolean).
 - Wrong `DeliveryStatus` members (`QUEUED`/`LEASED`) referenced in new code — corrected to `PENDING`/`IN_FLIGHT`.
 
 ### Changed
+- The shared logging/time shims moved from a top-level `libs.shared` to `webhook_engine._shared`, and `libs` is no longer installed. The distribution claimed a name generic enough to collide with a consumer's own `libs/`, and such a collision surfaces as a wrong import rather than an install error.
 - `POST /v1/emit` now appends one `IncomingEvent` to the event store (same path as a DB producer) instead of duplicating fan-out logic.
 - Dropped the `service` extra (FastAPI is a base dependency); added `mongo` extra.
 

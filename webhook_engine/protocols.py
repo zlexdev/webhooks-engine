@@ -31,6 +31,7 @@ __all__ = [
     "SecretReaderProtocol",
     "SignerProtocol",
     "SubscriptionReaderProtocol",
+    "TargetResolverProtocol",
     "WebhookDeliveryStoreProtocol",
 ]
 
@@ -150,7 +151,35 @@ class SignerProtocol(ABC):
         window_s: int,
     ) -> None:
         """Raise :class:`~webhook_engine.exceptions.SignatureVerificationError`
-        on any mismatch; return ``None`` on success."""
+        on any mismatch; return ``None`` on success.
+
+        ``headers`` arrive as the receiving framework produced them, so match
+        header names case-insensitively — most of them lower-case everything.
+        """
+
+
+class TargetResolverProtocol(ABC):
+    """Optional per-attempt DNS re-resolution.
+
+    Without one, ``DeliveryRecord.resolved_ip`` is pinned at enqueue and used
+    for every attempt — the strongest defence against DNS rebinding, and the
+    default. The cost shows up on long retry ladders: with ``max_attempts=8``
+    and ``max_delay_s=3600`` the last attempt fires hours later, so a receiver
+    that moved (failover, new balancer, DNS change) is unreachable and the
+    journal records ``network_error``, indistinguishable from a dead server.
+
+    Supplying a resolver trades some of that rebinding protection for
+    reachability. The address it returns is *not* trusted: it goes through the
+    same ``check_ip`` as the pinned one before anything is sent.
+    """
+
+    @abstractmethod
+    async def resolve(self, host: str) -> str | None:
+        """Return the current address for ``host``, or ``None`` for "unknown".
+
+        ``None`` means the dispatcher keeps the pinned IP. Returning a fallback
+        here instead would hide "I could not resolve" behind a real answer.
+        """
 
 
 class SecretReaderProtocol(ABC):

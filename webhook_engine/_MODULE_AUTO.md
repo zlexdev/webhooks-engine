@@ -5,9 +5,10 @@
 
 ## Submodules
 
-- [`ingest/`](ingest\_MODULE_AUTO.md) — Ingestion layer — producers write events to a shared DB; the engine reads. (6 py, 9 cls)
-- [`service/`](service\_MODULE_AUTO.md) — Standalone HTTP microservice layer — optional, behind the ``service`` extra. (15 py, 27 cls, 41 fn)
-- [`stores/`](stores\_MODULE_AUTO.md) — Persistence stores for webhook delivery — pick a backend at bootstrap. (5 py, 8 cls, 9 fn)
+- [`_shared/`](_shared/_MODULE_AUTO.md) (2 py, 2 fn)
+- [`ingest/`](ingest/_MODULE_AUTO.md) — Ingestion layer — producers write events to a shared DB; the engine reads. (6 py, 9 cls)
+- [`service/`](service/_MODULE_AUTO.md) — Standalone HTTP microservice layer — optional, behind the ``service`` extra. (15 py, 29 cls, 43 fn)
+- [`stores/`](stores/_MODULE_AUTO.md) — Persistence stores for webhook delivery — pick a backend at bootstrap. (5 py, 8 cls, 9 fn)
 
 ## __init__.py
 ```
@@ -23,11 +24,11 @@
 
 cls WebhookRetryConfig: max_attempts: int, base_delay_s: float, backoff_factor: float, max_delay_s: float, jitter_pct: float
 
-cls WebhookSecurityConfig: require_https_in_prod: bool, allow_http_in_dev: bool, blocked_cidrs: tuple[str, ...], allowed_hosts: tuple[str, ...] | None, preflight_enabled: bool, preflight_timeout_s: float, signature_window_s: int, max_response_bytes: int, secret_cache_ttl_s: float, revalidate_every_s: int, … (12)
+cls WebhookSecurityConfig: require_https_in_prod: bool, allow_http_in_dev: bool, blocked_cidrs: tuple[str, ...], allowed_hosts: tuple[str, ...] | None, trusted_private_hosts: tuple[str, ...], preflight_enabled: bool, preflight_timeout_s: float, signature_window_s: int, max_response_bytes: int, secret_cache_ttl_s: float, … (13)
 
 cls WebhookLimitsConfig: max_subscriptions_per_user: int, max_events_per_subscription: int, per_host_concurrency: int, http_connect_timeout_s: float, http_read_timeout_s: float, http_total_timeout_s: float, max_body_bytes: int
 
-cls WebhookDispatchConfig: enabled: bool, poll_interval_s: float, batch_size: int, worker_concurrency: int, lease_ttl_s: int, reclaim_after_s: int, max_unhandled_attempts: int, drain_timeout_s: float
+cls WebhookDispatchConfig: enabled: bool, poll_interval_s: float, batch_size: int, worker_concurrency: int, lease_ttl_s: int, reclaim_after_s: int, max_unhandled_attempts: int, drain_timeout_s: float, on_outcome_timeout_s: float
 
 cls WebhookStorageConfig: key_prefix: str, retention_sent_s: int, retention_dead_s: int, attempts_history_limit: int, recent_stream_maxlen: int, idempotency_ttl_s: int
 
@@ -56,7 +57,7 @@ cls WebhookDispatcher
 cls EngineTickStats: claimed: int, sent: int, retried: int, dead: int, errors: int
 
 cls WebhookEngine
-  __init__(store: WebhookDeliveryStoreProtocol, dispatcher: WebhookDispatcher, config: WebhookDispatchConfig, clock: Clock) -> None
+  __init__(store: WebhookDeliveryStoreProtocol, dispatcher: WebhookDispatcher, config: WebhookDispatchConfig, clock: Clock, on_outcome: OutcomeCallback? = None) -> None
   async tick() -> EngineTickStats
   async drain(timeout_s: float) -> None
 
@@ -89,11 +90,13 @@ cls SignatureVersion(StrEnum): V1
 
 
 cls WebhookEnvelope: API_VERSION: ClassVar[str], id: str, event: str, event_id: str, schema_version: str, emitted_at: datetime, tenant_id: str | None, attempt: int, redelivery_of: str | None, data: dict[str, Any]
+  # Outer JSON shape every target receives.
 
 should_auto_redact(field_name: str) -> bool
   # Whether a field name matches one of the auto-redact patterns.
 
 redact_payload(data: dict[str, Any, meta: WebhookMeta) -> dict[str, Any]
+  # Drop sensitive fields from the outgoing payload.
 
 sha256_hex(body: bytes) -> str
 
@@ -128,6 +131,7 @@ cls WebhookSubscriptionAutoSuspended(PostEvent): subscription_id: str, owner_id:
 
 
 cls WebhookError(Exception)
+  # Base for every error raised inside ``webhook_engine``.
   __init__(message: str = '', **context: Any) -> None
 
 cls WebhookStartupError(WebhookError)
@@ -170,11 +174,14 @@ cls SignatureVerificationError(Exception)
 
 
 cls WebhookFanoutHandler(EventHandler[BaseEvent])
+  # Generic handler subclass. The installer synthesizes one concrete
   __init__(bus: BaseEventBus, reader: SubscriptionReaderProtocol, store: WebhookDeliveryStoreProtocol, dispatch_enabled: Callable[[], bool, clock: Callable[[], datetime) -> None
   async handle(event: BaseEvent, ctx: HandlerContext) -> None
   specialize() -> type[WebhookFanoutHandler]
+    # Return a dedicated subclass bound to one event.
 
 _event_to_raw(event: BaseEvent) -> dict[str, object]
+  # Event → plain dict. Mirrors the outbox serializer so the same
 
 ```
 
@@ -186,6 +193,7 @@ _event_to_raw(event: BaseEvent) -> dict[str, object]
 cls WebhookFanoutInstaller
   __init__() -> None
   install_all(catalog: WebhookCatalog? = None) -> int
+    # Install handlers for every entry; return count of new installs.
   is_installed(event_name: str) -> bool
 
 ```
@@ -209,6 +217,7 @@ cls HostSemaphorePool
 
 
 cls HttpxSender
+  # Structural impl of :class:`HttpSenderProtocol`.
   __init__(client: httpx.AsyncClient) -> None
   async post() -> HttpSendResult
 
@@ -221,8 +230,10 @@ cls HttpxSender
 T = TypeVar('T')
 
 cls WebhookMeta: name: str, description: str, scopes: tuple[WebhookScope, ...], tenant_field: str | None, since: str, sample_payload: dict[str, Any] | None, redacted_fields: tuple[str, ...], allow_sensitive: bool
+  # Attached to a ``BaseEvent`` subclass to expose it to subscribers.
 
 webhook_event(meta: WebhookMeta) -> Callable[[type[T]], type[T]]
+  # Attach ``webhook_meta`` to an event class. Opt-in marker.
 
 ```
 
@@ -246,6 +257,7 @@ cls DeliveryPolicy
 
 
 cls SecretMaterial: current: str, previous: str | None, previous_expires_at: datetime | None
+  # Plaintext secret material resolved at dispatch time.
 
 cls WebhookDeliveryStoreProtocol(ABC)
   async enqueue_many(records: list[DeliveryRecord) -> None
@@ -263,6 +275,17 @@ cls HttpSenderProtocol(Protocol)
 
 cls SubscriptionReaderProtocol(ABC)
   async for_event(event_name: str, tenant_id: str?) -> list[SubscriptionSnapshot]
+
+cls SignerProtocol(ABC)
+  # How a delivery is signed — and how a receiver checks that signature.
+  sign() -> SignedHeaders
+  verify() -> None
+    # Raise :class:`~webhook_engine.exceptions.SignatureVerificationError`
+
+cls TargetResolverProtocol(ABC)
+  # Optional per-attempt DNS re-resolution.
+  async resolve(host: str) -> str | None
+    # Return the current address for ``host``, or ``None`` for "unknown".
 
 cls SecretReaderProtocol(ABC)
   async get(subscription_id: str) -> SecretMaterial
@@ -289,45 +312,64 @@ cls WebhookEventRegistry
 # HMAC-SHA256 signing for webhook deliveries.
 
 
-cls SignatureHeaders: webhook_id: str, webhook_event: str, webhook_event_id: str, webhook_timestamp: str, webhook_signature: str
-
-cls HmacSigner
+cls HmacSigner(SignerProtocol)
   __init__(version: SignatureVersion = SignatureVersion.V1) -> None
   sign() -> SignatureHeaders
   verify() -> None
+    # Consumer-side helper exported for user-docs + tests.
 
 ```
 
 ## ssrf_guard.py
 ```
-# Pure URL / IP safety checks. No DNS I/O — resolution happens in the
+# Pure URL / IP safety checks. No DNS I/O — the caller resolves the host and
 
 
 cls BlockedCidrSet: nets_v4: tuple[ipaddress.IPv4Network, ...], nets_v6: tuple[ipaddress.IPv6Network, ...]
 
 cls UrlSafetyValidator
+  # Pure (no I/O) URL + IP safety checks.
   __init__(security: WebhookSecurityConfig) -> None
   validate(url: str, resolved_ips: tuple[str, ...) -> ResolvedTarget
   check_ip(ip: str) -> None
+    # Re-validation hook used by the dispatcher before POST.
+
+_host_matches(host: str, patterns: tuple[str, ...) -> bool
+  # Exact name or ``*.suffix``, case-insensitive. Used by allowed_hosts.
+
+_is_trusted_private(host: str, port: int?, patterns: tuple[str, ...) -> bool
+  # Exact ``host`` or ``host:port``. No wildcards — see the config docstring.
+
+_normalise_host(host: str) -> str
+  # Lower-case, drop the FQDN trailing dot, fold IDN to its ASCII form.
 
 ```
 
 ## types.py
 ```
-# Type aliases + small public dataclasses for libs/webhooks.
+# Type aliases + small public dataclasses for webhook_engine.
 
 
 cls AttemptRecord: attempt: int, attempted_at: datetime, http_code: int | None, duration_ms: int, error: str | None, response_snippet: str
 
 cls DeliveryRecord: delivery_id: DeliveryId, subscription_id: SubscriptionId, owner_id: OwnerId, event_name: EventName, event_id: str, schema_version: str, tenant_id: str | None, data_json: bytes, emitted_at: datetime, target_url: str, … (16)
+  # Persisted queue row — everything needed to sign + POST one delivery.
 
 cls HttpSendResult: status: int, headers: dict[str, str], body_snippet: str, duration_ms: int
 
 cls DispatchOutcome: status: DeliveryStatus, next_fire_at: datetime | None, attempt: AttemptRecord
 
+cls SignedHeaders(Protocol)
+  # What a signer hands back: the outbound headers for one delivery.
+  as_dict() -> dict[str, str]
+
+cls SignatureHeaders: webhook_id: str, webhook_event: str, webhook_event_id: str, webhook_timestamp: str, webhook_signature: str
+  # The shipped ``Webhook-*`` header set — what :class:`HmacSigner` returns.
+
 cls ResolvedTarget: host: HostName, port: int, scheme: str, ips: tuple[str, ...]
 
 cls SubscriptionSnapshot: id: SubscriptionId, owner_id: OwnerId, url: str, resolved_ip: str, retry_overrides: WebhookRetryConfig | None
+  # Tenant-scoped subscription view used by the fanout handler.
 
 ```
 
@@ -342,6 +384,9 @@ cls WebhookVerificationError(Exception)
 
 _header(headers: Mapping[str, str, name: str) -> str
 
+_verify_via_signer() -> None
+
 verify_webhook() -> None
+  # Validate an incoming webhook delivery in constant time.
 
 ```

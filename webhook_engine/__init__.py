@@ -63,6 +63,7 @@ from webhook_engine.protocols import (
     SecretReaderProtocol,
     SignerProtocol,
     SubscriptionReaderProtocol,
+    TargetResolverProtocol,
     WebhookDeliveryStoreProtocol,
 )
 from webhook_engine.signer import HmacSigner, SignatureHeaders
@@ -125,6 +126,7 @@ __all__ = [
     "SubscriptionReaderProtocol",
     "SubscriptionSnapshot",
     "SubscriptionStatus",
+    "TargetResolverProtocol",
     "UnknownEventName",
     "UrlSafetyValidator",
     "WebhookDeliveryStoreProtocol",

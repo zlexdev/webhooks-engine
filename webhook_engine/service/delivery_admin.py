@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from webhook_engine.enums import DeliveryStatus
@@ -24,6 +25,15 @@ if TYPE_CHECKING:
     from webhook_engine.ssrf_guard import UrlSafetyValidator
 
 PING_EVENT = "webhook.ping"
+
+
+def _check_target(ssrf: UrlSafetyValidator, resolved_ip: str, url: str) -> None:
+    parsed = urlsplit(url)
+    ssrf.check_ip(
+        resolved_ip,
+        host=parsed.hostname or None,
+        port=parsed.port or (443 if parsed.scheme == "https" else 80),
+    )
 
 
 class DeliveryAdminService:
@@ -55,7 +65,7 @@ class DeliveryAdminService:
         so a replay never resurrects a now-blocked target.
         """
         original = await self.get(delivery_id)
-        self._ssrf.check_ip(original.resolved_ip)
+        _check_target(self._ssrf, original.resolved_ip, original.target_url)
 
         now = datetime.now(UTC)
         clone = DeliveryRecord(
@@ -85,7 +95,7 @@ class DeliveryAdminService:
         sub = await self._subs.get(sub_id)
         if sub is None:
             raise SubscriptionNotFound(subscription_id=sub_id)
-        self._ssrf.check_ip(sub.resolved_ip)
+        _check_target(self._ssrf, sub.resolved_ip, sub.url)
 
         now = datetime.now(UTC)
         delivery_id = uuid4().hex

@@ -32,12 +32,19 @@ async ping(body: SubscriptionIdRequest, x_source_key: str = ..., deps: ServiceDe
 ```
 # POST /v1/emit — an HTTP producer path into the same event store.
 
+MAX_BATCH = 50
 
 cls EmitRequest(BaseModel)
 
 cls EmitResponse(BaseModel)
 
+cls BatchEmitRequest(BaseModel)
+
+cls BatchEmitResponse(BaseModel)
+
 async emit_event(body: EmitRequest, x_source_key: str = ..., deps: ServiceDeps = Depends(get_deps)) -> EmitResponse
+
+async emit_batch(body: BatchEmitRequest, x_source_key: str = ..., deps: ServiceDeps = Depends(get_deps)) -> BatchEmitResponse
 
 ```
 
