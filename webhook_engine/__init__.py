@@ -5,6 +5,21 @@ I/O (Redis / Postgres queue, HTTP sender, Mongo reader) lives under
 ``webhook_engine/stores/`` and ``webhook_engine/service/``.
 """
 
+from webhook_engine.client import (
+    MAX_BATCH,
+    DeliveryView,
+    EmitAccepted,
+    EmitBatchAccepted,
+    EmitEvent,
+    SubscriptionSpec,
+    SubscriptionView,
+    WebhookAuthError,
+    WebhookClientError,
+    WebhookEngineClient,
+    WebhookProtocolError,
+    WebhookServiceError,
+    WebhookTransportError,
+)
 from webhook_engine.config import (
     DEFAULT_WEBHOOK_POLICY,
     WebhookDispatchConfig,
@@ -99,7 +114,20 @@ __all__ = [
     "DeliveryPolicy",
     "DeliveryRecord",
     "DeliveryStatus",
+    "DeliveryView",
     "DispatchOutcome",
+    "EmitAccepted",
+    "EmitBatchAccepted",
+    "EmitEvent",
+    "MAX_BATCH",
+    "SubscriptionSpec",
+    "SubscriptionView",
+    "WebhookAuthError",
+    "WebhookClientError",
+    "WebhookEngineClient",
+    "WebhookProtocolError",
+    "WebhookServiceError",
+    "WebhookTransportError",
     "EngineTickStats",
     "EventLimitExceeded",
     "HmacSigner",

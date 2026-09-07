@@ -6,6 +6,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`WebhookEngineClient`** (`webhook_engine.client`) — typed async client for the
+  HTTP surface, shipped with the service that defines it so the two cannot drift.
+  No extra: `httpx` is already a base dependency. Requests are models
+  (`EmitEvent`, `SubscriptionSpec`), reads return `Page[T]`, and statuses become
+  exceptions rather than a number the caller re-parses: the service's own
+  `SubscriptionNotFound` / `DeliveryNotFound` / `InvalidWebhookTarget` (carrying
+  its `InvalidTargetReason`) where the meaning matches in-process, plus
+  `WebhookAuthError`, `WebhookServiceError`, `WebhookTransportError` and
+  `WebhookProtocolError` for what can only happen over HTTP.
+
+### Fixed
+- **`docs/usage/microservice.md` documented the signature wrong, and a receiver
+  that followed it verified nothing.** All five delivery headers were named with
+  an `X-` prefix they do not have, the signature was described as a bare digest
+  when it is `v1=<hex>`, and the signed message was given as the body rather
+  than `{timestamp}.{event_id}.{sha256_hex(body)}`. `Webhook-Event-Id` was
+  missing entirely although the receiver needs it to rebuild the MAC.
+  `POST /v1/emit/batch` was absent from the endpoint table. The doc now also
+  points at the shipped `verify_webhook()` instead of pseudocode, and states
+  that `Webhook-Event` is NOT covered by the signature.
+
 ## [0.2.0] — 2026-08-10
 
 First tagged release — `0.1.0` was documented but never tagged.

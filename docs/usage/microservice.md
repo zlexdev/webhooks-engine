@@ -34,6 +34,7 @@ reads return a `Page` envelope (`items` / `total` / `limit` / `offset`).
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/v1/emit` | Emit an event; fan out to all active subscriptions |
+| `POST` | `/v1/emit/batch` | Append up to 50 events in one write, each idempotent on its own `event_id` |
 | `POST` | `/v1/subscriptions/create` | Create a subscription (returns the secret once) |
 | `GET` | `/v1/subscriptions/list?owner_id=&limit=&offset=` | List an owner's subscriptions |
 | `GET` | `/v1/subscriptions/get?id=` | Fetch one subscription |
@@ -62,31 +63,57 @@ reads return a `Page` envelope (`items` / `total` / `limit` / `offset`).
 `event_id` defaults to a random hex if omitted. Supplying your own makes the
 emit idempotent — safe to retry on network failure.
 
+## Calling it from Python
+
+`webhook_engine.client` ships with the package — same repo, same commit as the
+routes above, so it cannot drift from them.
+
+```python
+from webhook_engine import EmitEvent, WebhookEngineClient
+
+async with WebhookEngineClient(base_url="http://engine:8080", source_key=KEY) as client:
+    await client.emit(EmitEvent(event="order.paid", tenant_id="acme", data={"order_id": 42}))
+```
+
+Errors are this package's own exceptions where the meaning matches in-process
+(`SubscriptionNotFound`, `DeliveryNotFound`, `InvalidWebhookTarget` — the last
+carrying its `InvalidTargetReason`). The four that exist only over HTTP are
+separate types because they need opposite handling: `WebhookAuthError` (wrong
+key — retrying cannot fix it), `WebhookServiceError` (answered; `status` decides
+whether to retry), `WebhookTransportError` (never arrived), `WebhookProtocolError`
+(a 2xx that is not this service).
+
 ## Verifying signatures
+
+`verify_webhook()` ships with the package — receivers should call it rather
+than reimplement the pseudocode below.
 
 Each outgoing delivery includes:
 
 | Header | Meaning |
 |---|---|
-| `X-Webhook-Signature-256` | `hmac_sha256(secret, body)` hex digest |
-| `X-Webhook-Timestamp` | UTC unix seconds at signing time |
-| `X-Webhook-Id` | The delivery id |
-| `X-Webhook-Event` | The event name |
+| `Webhook-Signature` | `<version>=<hex mac>`, e.g. `v1=3f9c…` |
+| `Webhook-Timestamp` | UTC unix seconds at signing time |
+| `Webhook-Id` | The delivery id |
+| `Webhook-Event` | The event name |
+| `Webhook-Event-Id` | The event id — **part of the signed message**, so a receiver needs it to rebuild the MAC |
 
-Receiver pseudocode:
+**No `X-` prefix on any of them, and the signature is not a bare digest.** Both
+were wrong here until 07.09.2026, and a receiver following the old text failed
+every verification.
+
+**The signed message is not the body.** It is
+`f"{timestamp}.{event_id}.{sha256_hex(body)}"` (`signer.py`), which is what
+binds the timestamp into the MAC and makes the replay window enforceable.
+
+Use the shipped verifier rather than reimplementing it:
 
 ```python
-import hashlib, hmac, time
-
-def verify(secret: str, body: bytes, sig: str, ts: str, window_s: int = 300) -> bool:
-    if abs(time.time() - int(ts)) > window_s:
-        return False  # stale — replay protection
-    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig)
+from webhook_engine import verify_webhook
 ```
 
-(Confirm the exact header names and signing input against `webhook-engine/signer.py`
-for your version.)
+**`Webhook-Event` is NOT covered by the signature.** Route on the event name in
+the *body*; treat the header as a routing hint only.
 
 ## Configuration
 
