@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 __all__ = [
     "AttemptRecord",
+    "DEFAULT_PROFILE",
     "CidrString",
     "DeliveryId",
     "DeliveryRecord",
@@ -35,6 +36,9 @@ if TYPE_CHECKING:
     from webhook_engine.enums import DeliveryStatus
 
 
+DEFAULT_PROFILE = "default"
+"""Profile name of a row written without one — `ProfileRegistry.single()` serves it."""
+
 DeliveryId = str
 SubscriptionId = str
 OwnerId = str
@@ -53,6 +57,10 @@ class AttemptRecord:
     duration_ms: int
     error: str | None
     response_snippet: str
+    response_body: bytes = b""
+    """The 2xx answer up to the profile's `max_response_bytes`: a host applies an answer
+    carried in the body (a push the receiver completes in place)."""
+    response_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +88,11 @@ class DeliveryRecord:
     fire_at: datetime
     created_at: datetime
     status: DeliveryStatus
+    profile: str = DEFAULT_PROFILE
+    """Name of the `DeliveryProfile` this row is sent with (`ProfileRegistry.of`)."""
+    secret_version: str | None = None
+    """Changes when the owner's secret rotates: a new value bypasses the reader's cache
+    at once. `None` — the reader's TTL alone (0.2 behaviour)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +101,8 @@ class HttpSendResult:
     headers: dict[str, str]
     body_snippet: str
     duration_ms: int
+    body: bytes = b""
+    body_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)

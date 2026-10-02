@@ -16,6 +16,8 @@ from webhook_engine.enums import InvalidTargetReason
 
 __all__ = [
     "DeliveryInFlight",
+    "IncompleteProfiles",
+    "UnknownProfile",
     "DeliveryNotFound",
     "EventLimitExceeded",
     "InvalidWebhookTarget",
@@ -126,3 +128,21 @@ class DeliveryInFlight(WebhookError):
 
 class SignatureVerificationError(Exception):
     """Consumer-side helper raised by :meth:`HmacSigner.verify`."""
+
+
+class IncompleteProfiles(WebhookStartupError):
+    """`ProfileRegistry.complete` got a kind enum with members that have no profile."""
+
+    error_code = "WEBHOOK_INCOMPLETE_PROFILES"
+
+    def __init__(self, missing: tuple[str, ...]) -> None:
+        super().__init__(f"no delivery profile for {', '.join(missing)}", missing=missing)
+
+
+class UnknownProfile(WebhookError):
+    """A delivery row names a profile the registry was not built with."""
+
+    error_code = "WEBHOOK_UNKNOWN_PROFILE"
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"unknown delivery profile {name!r}", name=name)

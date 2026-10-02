@@ -5,6 +5,7 @@ I/O (Redis / Postgres queue, HTTP sender, Mongo reader) lives under
 ``webhook_engine/stores/`` and ``webhook_engine/service/``.
 """
 
+from webhook_engine.body import BaseBodyEncoder, EnvelopeEncoder, RawEncoder
 from webhook_engine.config import (
     DEFAULT_WEBHOOK_POLICY,
     WebhookDispatchConfig,
@@ -36,11 +37,13 @@ from webhook_engine.exceptions import (
     DeliveryInFlight,
     DeliveryNotFound,
     EventLimitExceeded,
+    IncompleteProfiles,
     InvalidWebhookTarget,
     SignatureVerificationError,
     SubscriptionLimitExceeded,
     SubscriptionNotFound,
     UnknownEventName,
+    UnknownProfile,
     WebhookEventCollision,
     WebhookMetaMissing,
     WebhookPermissionDenied,
@@ -55,7 +58,8 @@ from webhook_engine.ingest import (
     IncomingEvent,
     IngestTickStats,
 )
-from webhook_engine.policy import DeliveryPolicy
+from webhook_engine.policy import DeliveryPolicy, parse_retry_after
+from webhook_engine.profiles import DefaultKind, DeliveryProfile, ProfileRegistry
 from webhook_engine.protocols import (
     Clock,
     HttpSenderProtocol,
@@ -71,6 +75,7 @@ from webhook_engine.ssrf_guard import BlockedCidrSet, UrlSafetyValidator
 from webhook_engine.stores.base import BaseWebhookDeliveryStore
 from webhook_engine.stores.redis import RedisWebhookDeliveryStore
 from webhook_engine.types import (
+    DEFAULT_PROFILE,
     AttemptRecord,
     DeliveryRecord,
     DispatchOutcome,
@@ -82,6 +87,16 @@ from webhook_engine.types import (
 from webhook_engine.verify import WebhookVerificationError, verify_webhook
 
 __all__ = [
+    "parse_retry_after",
+    "UnknownProfile",
+    "RawEncoder",
+    "ProfileRegistry",
+    "IncompleteProfiles",
+    "EnvelopeEncoder",
+    "DeliveryProfile",
+    "DefaultKind",
+    "DEFAULT_PROFILE",
+    "BaseBodyEncoder",
     "AttemptRecord",
     "BaseEventStore",
     "BaseWebhookDeliveryStore",

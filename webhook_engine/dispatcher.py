@@ -12,8 +12,8 @@ Hot path, per record:
 3. Pick the target address (pinned ``resolved_ip``, or a fresh one if a
    ``TargetResolverProtocol`` was supplied) and re-check it against the
    CIDR block set — catches DNS rebinding between enqueue and send.
-4. Build :class:`WebhookEnvelope`, sign at *now*, POST under the
-   per-host bulkhead.
+4. Encode the body with the record's profile (envelope by default), sign at
+   *now*, POST under the per-host bulkhead.
 5. Classify + mark — success / scheduled retry / dead-letter.
 6. On dead-letter, emit :class:`WebhookDeliveryExhausted` (direct
    dispatch, never through the outbox).
@@ -21,10 +21,9 @@ Hot path, per record:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -32,12 +31,12 @@ import httpx
 
 from webhook_engine._shared.logging import get_logger
 from webhook_engine._shared.time import now_utc
-from webhook_engine.config import WebhookPolicyConfig, WebhookRetryConfig
+from webhook_engine.config import WebhookPolicyConfig
 from webhook_engine.enums import DeliveryStatus, RetryReason
-from webhook_engine.envelope import WebhookEnvelope
 from webhook_engine.exceptions import InvalidWebhookTarget
 from webhook_engine.host_semaphores import HostSemaphorePool
-from webhook_engine.policy import DeliveryPolicy
+from webhook_engine.policy import DeliveryPolicy, parse_retry_after
+from webhook_engine.profiles import DeliveryProfile, ProfileRegistry
 from webhook_engine.protocols import (
     Clock,
     HttpSenderProtocol,
@@ -51,6 +50,14 @@ from webhook_engine.types import AttemptRecord, DeliveryRecord, DispatchOutcome,
 
 __all__ = ["WebhookDispatcher"]
 
+_RETRY_AFTER = "retry-after"
+
+
+def _header(headers: dict[str, str], name: str) -> str | None:
+    """Header lookup that ignores case: a sender may hand back its own casing."""
+    return next((v for k, v in headers.items() if k.lower() == name), None)
+
+
 if TYPE_CHECKING:
     from asyncbus import BaseEventBus
 
@@ -59,7 +66,6 @@ if TYPE_CHECKING:
 class _SignedDelivery:
     body: bytes
     headers: dict[str, str]
-    envelope: WebhookEnvelope
 
 
 class WebhookDispatcher:
@@ -77,6 +83,7 @@ class WebhookDispatcher:
         clock: Clock,
         bus: BaseEventBus | None = None,
         resolver: TargetResolverProtocol | None = None,
+        profiles: ProfileRegistry[Any] | None = None,
     ) -> None:
         self._signer = signer
         self._sender = http_sender
@@ -89,13 +96,16 @@ class WebhookDispatcher:
         self._clock = clock
         self._bus = bus
         self._resolver = resolver
+        self._profiles: ProfileRegistry[Any] = profiles or ProfileRegistry.single()
         self._log = get_logger("webhooks.dispatcher")
 
     async def send(self, record: DeliveryRecord) -> DispatchOutcome:
         attempt_no = record.attempts + 1
         now = self._clock()
         limits = self._config.limits
-        retry_cfg = self._retry_config(record)
+        profile = self._profiles.of(record)
+        retry_cfg = profile.retry or self._config.retry
+        max_response = profile.max_response_bytes or self._config.security.max_response_bytes
         parsed_target = urlsplit(record.target_url)
         host = parsed_target.hostname or ""
         target_port = parsed_target.port or (443 if parsed_target.scheme == "https" else 80)
@@ -128,7 +138,9 @@ class WebhookDispatcher:
             )
 
         try:
-            secret = await self._secret_reader.get(record.subscription_id)
+            secret = await self._secret_reader.get_versioned(
+                record.subscription_id, record.secret_version
+            )
         except Exception as exc:  # noqa: BLE001 - resolver can fail on missing sub
             self._log.warn(
                 "secret_resolve_failed",
@@ -147,7 +159,7 @@ class WebhookDispatcher:
                 response_snippet="",
             )
 
-        signed = self._build_signed(record, secret.current, attempt_no, now)
+        signed = self._build_signed(record, profile, secret.current, attempt_no, now)
 
         send_result: HttpSendResult | None = None
         retry_reason: RetryReason | None = None
@@ -163,7 +175,7 @@ class WebhookDispatcher:
                     connect_timeout_s=limits.http_connect_timeout_s,
                     read_timeout_s=limits.http_read_timeout_s,
                     total_timeout_s=limits.http_total_timeout_s,
-                    max_response_bytes=self._config.security.max_response_bytes,
+                    max_response_bytes=max_response,
                 )
             except httpx.RequestError as exc:
                 retry_reason = self._policy.classify_exception(exc)
@@ -184,6 +196,8 @@ class WebhookDispatcher:
             duration_ms=duration_ms,
             error=send_error,
             response_snippet=send_result.body_snippet if send_result else "",
+            response_body=send_result.body if send_result and retry_reason is None else b"",
+            response_truncated=send_result.body_truncated if send_result else False,
         )
 
         if status == DeliveryStatus.SENT:
@@ -191,7 +205,10 @@ class WebhookDispatcher:
             return DispatchOutcome(status=status, next_fire_at=None, attempt=attempt)
 
         if status == DeliveryStatus.FAILED_RETRY:
-            delay_s = self._policy.next_delay_s(attempt_no, retry_cfg)
+            waited = None
+            if send_result is not None and profile.honour_retry_after:
+                waited = parse_retry_after(_header(send_result.headers, _RETRY_AFTER), now=now)
+            delay_s = self._policy.next_delay_s(attempt_no, retry_cfg, retry_after_s=waited)
             fire_at = now + timedelta(seconds=delay_s)
             await self._store.schedule_retry(record.delivery_id, fire_at, attempt)
             return DispatchOutcome(status=status, next_fire_at=fire_at, attempt=attempt)
@@ -223,34 +240,17 @@ class WebhookDispatcher:
             return record.resolved_ip
         return fresh or record.resolved_ip
 
-    def _retry_config(self, record: DeliveryRecord) -> WebhookRetryConfig:
-        _ = record  # reserved for per-subscription retry overrides
-        return self._config.retry
-
     def _build_signed(
         self,
         record: DeliveryRecord,
+        profile: DeliveryProfile,
         secret: str,
         attempt_no: int,
         now: datetime,
     ) -> _SignedDelivery:
-        try:
-            data = json.loads(record.data_json)
-        except ValueError:
-            data = {}
-        envelope = WebhookEnvelope(
-            id=record.delivery_id,
-            event=record.event_name,
-            event_id=record.event_id,
-            schema_version=record.schema_version,
-            emitted_at=record.emitted_at,
-            tenant_id=record.tenant_id,
-            attempt=attempt_no,
-            redelivery_of=record.redelivery_of,
-            data=data,
-        )
-        body = envelope.to_body()
-        headers = self._signer.sign(
+        body = profile.body.encode(record, attempt=attempt_no)
+        signer = profile.signer or self._signer
+        headers = signer.sign(
             delivery_id=record.delivery_id,
             event_name=record.event_name,
             event_id=record.event_id,
@@ -258,7 +258,7 @@ class WebhookDispatcher:
             secret=secret,
             now=now,
         ).as_dict()
-        return _SignedDelivery(body=body, headers=headers, envelope=envelope)
+        return _SignedDelivery(body=body, headers=headers)
 
     async def _dead_letter(
         self,

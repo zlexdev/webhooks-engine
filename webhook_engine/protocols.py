@@ -188,3 +188,14 @@ class SecretReaderProtocol(ABC):
 
     @abstractmethod
     def invalidate(self, subscription_id: str) -> None: ...
+
+    async def get_versioned(self, subscription_id: str, version: str | None) -> SecretMaterial:
+        """`get` that drops the cached entry when the row names a newer secret version.
+
+        Default for every reader: rotation is seen on the next delivery, not after the TTL.
+        """
+        seen: dict[str, str] = self.__dict__.setdefault("_secret_versions", {})
+        if version is not None and seen.get(subscription_id) != version:
+            self.invalidate(subscription_id)
+            seen[subscription_id] = version
+        return await self.get(subscription_id)

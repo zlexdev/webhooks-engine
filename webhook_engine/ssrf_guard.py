@@ -94,16 +94,19 @@ class UrlSafetyValidator:
         try:
             addr = ipaddress.ip_address(ip)
         except ValueError as exc:
-            raise InvalidWebhookTarget(
-                InvalidTargetReason.UNRESOLVABLE, f"invalid ip: {ip}"
-            ) from exc
+            raise InvalidWebhookTarget(InvalidTargetReason.UNRESOLVABLE, "invalid ip") from exc
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            # ::ffff:10.0.0.1 is 10.0.0.1 on the wire — judge the v4 address
+            addr = addr.ipv4_mapped
         if not self._blocked.contains(addr):
             return
         if host is not None and _is_trusted_private(
             host, port, self._security.trusted_private_hosts
         ):
             return
-        raise InvalidWebhookTarget(InvalidTargetReason.PRIVATE_IP, f"blocked ip: {ip}")
+        reason = _reason(addr)
+        # the text names the reason, never the address: it reaches the subscriber's logs
+        raise InvalidWebhookTarget(reason, f"blocked ip ({reason.value})")
 
     def _check_scheme(self, p: SplitResult, env: str) -> None:
         if p.scheme not in ("http", "https"):
@@ -142,6 +145,34 @@ class UrlSafetyValidator:
             raise InvalidWebhookTarget(InvalidTargetReason.UNRESOLVABLE, "no resolved IPs")
         for ip_s in ips:
             self.check_ip(ip_s, host=host, port=port)
+
+
+_CGNAT = ipaddress.IPv4Network("100.64.0.0/10")
+_NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
+_SIX_TO_FOUR = ipaddress.IPv6Network("2002::/16")
+_ULA = ipaddress.IPv6Network("fc00::/7")
+
+
+def _reason(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> InvalidTargetReason:
+    """Why a blocked address is blocked, most specific first."""
+    if addr.is_loopback:
+        return InvalidTargetReason.LOOPBACK
+    if addr.is_link_local:
+        return InvalidTargetReason.LINK_LOCAL
+    if addr.is_multicast:
+        return InvalidTargetReason.MULTICAST
+    if isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT:
+        return InvalidTargetReason.CGNAT
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr in _NAT64:
+            return InvalidTargetReason.NAT64
+        if addr in _SIX_TO_FOUR:
+            return InvalidTargetReason.SIX_TO_FOUR
+        if addr in _ULA:
+            return InvalidTargetReason.ULA
+    if addr.is_reserved:
+        return InvalidTargetReason.RESERVED
+    return InvalidTargetReason.PRIVATE_IP
 
 
 def _host_matches(host: str, patterns: tuple[str, ...]) -> bool:

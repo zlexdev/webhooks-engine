@@ -58,6 +58,14 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt
 
 
+_COLUMNS = (
+    "delivery_id, subscription_id, owner_id, event_name, event_id, schema_version, tenant_id, "
+    "data_json, emitted_at, target_url, resolved_ip, redelivery_of, attempts, fire_at, created_at, "
+    "status, lease_expiry, profile, secret_version"
+)
+"""Every column a delivery row is read and written with: one list, four statements."""
+
+
 def _row_to_delivery(row: object) -> DeliveryRecord:
     """Map a SQLAlchemy ``Row`` to :class:`DeliveryRecord`."""
     return DeliveryRecord(
@@ -77,6 +85,8 @@ def _row_to_delivery(row: object) -> DeliveryRecord:
         fire_at=_ensure_utc(row.fire_at),  # type: ignore[attr-defined]
         created_at=_ensure_utc(row.created_at),  # type: ignore[attr-defined]
         status=DeliveryStatus(row.status),  # type: ignore[attr-defined]
+        profile=row.profile,  # type: ignore[attr-defined]
+        secret_version=row.secret_version,  # type: ignore[attr-defined]
     )
 
 
@@ -101,15 +111,12 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
 
         stmt = text(f"""
             INSERT INTO {self._t} (
-                delivery_id, subscription_id, owner_id, event_name, event_id,
-                schema_version, tenant_id, data_json, emitted_at, target_url,
-                resolved_ip, redelivery_of, attempts, fire_at, created_at,
-                status, lease_expiry
+                {_COLUMNS}
             ) VALUES (
                 :delivery_id, :subscription_id, :owner_id, :event_name, :event_id,
                 :schema_version, :tenant_id, :data_json, :emitted_at, :target_url,
                 :resolved_ip, :redelivery_of, :attempts, :fire_at, :created_at,
-                :status, NULL
+                :status, NULL, :profile, :secret_version
             )
             ON CONFLICT (delivery_id) DO NOTHING
         """)
@@ -132,6 +139,8 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
                 "fire_at": r.fire_at,
                 "created_at": r.created_at,
                 "status": DeliveryStatus.PENDING.value,
+                "profile": r.profile,
+                "secret_version": r.secret_version,
             }
             for r in records
         ]
@@ -177,10 +186,7 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
                 lease_expiry = :lease_expiry
             WHERE delivery_id = ANY(:ids)
             RETURNING
-                delivery_id, subscription_id, owner_id, event_name, event_id,
-                schema_version, tenant_id, data_json, emitted_at, target_url,
-                resolved_ip, redelivery_of, attempts, fire_at, created_at,
-                status, lease_expiry
+                {_COLUMNS}
         """)
 
         result = await self._s.execute(select_stmt, {"now": now, "batch_size": batch_size})
@@ -313,10 +319,7 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
         """Fetch a single delivery row by primary key, or ``None``."""
         stmt = text(f"""
             SELECT
-                delivery_id, subscription_id, owner_id, event_name, event_id,
-                schema_version, tenant_id, data_json, emitted_at, target_url,
-                resolved_ip, redelivery_of, attempts, fire_at, created_at,
-                status, lease_expiry
+                {_COLUMNS}
             FROM {self._t}
             WHERE delivery_id = :delivery_id
         """)
@@ -332,10 +335,7 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
         """Return the most-recent *limit* deliveries for *sub_id*, newest first."""
         stmt = text(f"""
             SELECT
-                delivery_id, subscription_id, owner_id, event_name, event_id,
-                schema_version, tenant_id, data_json, emitted_at, target_url,
-                resolved_ip, redelivery_of, attempts, fire_at, created_at,
-                status, lease_expiry
+                {_COLUMNS}
             FROM {self._t}
             WHERE subscription_id = :sub_id
             ORDER BY created_at DESC
@@ -424,8 +424,16 @@ async def ensure_delivery_schema(
             fire_at        TIMESTAMPTZ NOT NULL,
             created_at     TIMESTAMPTZ NOT NULL,
             status         TEXT        NOT NULL DEFAULT 'pending',
-            lease_expiry   TIMESTAMPTZ
+            lease_expiry   TIMESTAMPTZ,
+            profile        TEXT        NOT NULL DEFAULT 'default',
+            secret_version TEXT
         )
+    """)
+    # tables created by 0.2 have neither column: CREATE ... IF NOT EXISTS does not add them
+    ddl_deliveries_profile = text(f"""
+        ALTER TABLE {deliveries_table}
+            ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'default',
+            ADD COLUMN IF NOT EXISTS secret_version TEXT
     """)
 
     ddl_deliveries_idx_status = text(f"""
@@ -458,6 +466,7 @@ async def ensure_delivery_schema(
 
     async with engine.begin() as conn:
         await conn.execute(ddl_deliveries)
+        await conn.execute(ddl_deliveries_profile)
         await conn.execute(ddl_deliveries_idx_status)
         await conn.execute(ddl_deliveries_idx_sub)
         await conn.execute(ddl_attempts)
