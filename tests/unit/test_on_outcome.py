@@ -73,9 +73,7 @@ async def test_a_hanging_callback_is_cut_off_and_the_delivery_still_counts(
         await asyncio.sleep(30)
 
     await store.enqueue_many([make_record()])
-    stats = await asyncio.wait_for(
-        _engine(store, sender, hangs, timeout_s=0.05).tick(), timeout=5
-    )
+    stats = await asyncio.wait_for(_engine(store, sender, hangs, timeout_s=0.05).tick(), timeout=5)
     assert (stats.claimed, stats.sent, stats.errors) == (1, 1, 0)
 
 

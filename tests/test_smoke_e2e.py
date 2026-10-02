@@ -89,18 +89,12 @@ def test_full_lifecycle(client: httpx.Client, auth: dict[str, str]) -> None:
         assert any(d["delivery_id"] == delivery_id for d in deliveries["items"])
 
         # pause / resume flip the status
-        paused = client.post(
-            "/v1/subscriptions/pause", json={"id": sub_id}, headers=auth
-        )
+        paused = client.post("/v1/subscriptions/pause", json={"id": sub_id}, headers=auth)
         assert paused.json()["status"] == "paused"
-        resumed = client.post(
-            "/v1/subscriptions/resume", json={"id": sub_id}, headers=auth
-        )
+        resumed = client.post("/v1/subscriptions/resume", json={"id": sub_id}, headers=auth)
         assert resumed.json()["status"] == "active"
     finally:
-        deleted = client.post(
-            "/v1/subscriptions/delete", json={"id": sub_id}, headers=auth
-        )
+        deleted = client.post("/v1/subscriptions/delete", json={"id": sub_id}, headers=auth)
         assert deleted.status_code == 200
 
     # gone after delete

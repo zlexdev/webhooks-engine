@@ -34,6 +34,7 @@ def _version() -> str:
     except PackageNotFoundError:
         return "0+unknown"
 
+
 __all__ = ["create_app", "main"]
 
 
