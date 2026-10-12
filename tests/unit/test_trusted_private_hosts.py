@@ -67,9 +67,7 @@ def test_idn_homograph_is_folded_before_matching() -> None:
 
 
 def test_validate_accepts_a_trusted_compose_target() -> None:
-    target = _guard("receiver:9000").validate(
-        "http://receiver:9000/hook", (COMPOSE_IP,), env="dev"
-    )
+    target = _guard("receiver:9000").validate("http://receiver:9000/hook", (COMPOSE_IP,), env="dev")
     assert target.host == "receiver"
     assert target.port == 9000
 

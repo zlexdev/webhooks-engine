@@ -93,9 +93,11 @@ class WebhookEngine:
     async def tick(self) -> EngineTickStats:
         now = self._clock()
         reclaimed = 0
+        reclaim_errors = 0
         try:
             reclaimed = await self._store.reclaim_stale(now)
         except Exception as exc:  # noqa: BLE001 - reclaim failure mustn't kill loop
+            reclaim_errors = 1
             self._log.warn("reclaim_failed", error=str(exc), exc_info=True)
 
         records: list[DeliveryRecord] = []
@@ -112,7 +114,7 @@ class WebhookEngine:
         if not records:
             if reclaimed:
                 self._log.debug("reclaimed_only", count=reclaimed)
-            return EngineTickStats(claimed=0, sent=0, retried=0, dead=0, errors=0)
+            return EngineTickStats(claimed=0, sent=0, retried=0, dead=0, errors=reclaim_errors)
 
         tasks: list[asyncio.Task[DispatchOutcome]] = []
         for record in records:
@@ -122,7 +124,8 @@ class WebhookEngine:
             tasks.append(task)
 
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-        sent = retried = dead = errors = 0
+        sent = retried = dead = 0
+        errors = reclaim_errors
         for outcome in outcomes:
             if isinstance(outcome, BaseException):
                 errors += 1

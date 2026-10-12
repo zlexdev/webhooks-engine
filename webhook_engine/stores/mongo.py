@@ -57,7 +57,7 @@ from pymongo.errors import BulkWriteError
 from webhook_engine._shared.logging import get_logger
 from webhook_engine.enums import DeliveryStatus
 from webhook_engine.stores.base import BaseWebhookDeliveryStore
-from webhook_engine.types import AttemptRecord, DeliveryId, DeliveryRecord
+from webhook_engine.types import DEFAULT_PROFILE, AttemptRecord, DeliveryId, DeliveryRecord
 
 __all__ = ["MongoWebhookDeliveryStore"]
 
@@ -93,6 +93,8 @@ def _record_to_doc(record: DeliveryRecord) -> dict[str, Any]:
         "fire_at": _ensure_utc(record.fire_at),
         "created_at": _ensure_utc(record.created_at),
         "status": record.status.value,
+        "profile": record.profile,
+        "secret_version": record.secret_version,
         "lease_expiry": None,
         "attempt_log": [],
     }
@@ -124,6 +126,8 @@ def _doc_to_record(doc: dict[str, Any]) -> DeliveryRecord:
         fire_at=_dt("fire_at"),
         created_at=_dt("created_at"),
         status=DeliveryStatus(doc.get("status", DeliveryStatus.PENDING.value)),
+        profile=doc.get("profile") or DEFAULT_PROFILE,
+        secret_version=doc.get("secret_version"),
     )
 
 

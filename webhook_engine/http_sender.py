@@ -77,13 +77,14 @@ class HttpxSender:
         response = await self._client.send(request, stream=True)
         try:
             captured = bytearray()
+            truncated = False
             async for chunk in response.aiter_raw():
                 remaining = max_response_bytes - len(captured)
-                if remaining <= 0:
+                if len(chunk) > remaining:
+                    captured.extend(chunk[: max(remaining, 0)])
+                    truncated = True
                     break
-                captured.extend(chunk[:remaining])
-                if len(captured) >= max_response_bytes:
-                    break
+                captured.extend(chunk)
             duration_ms = int((perf_counter() - started) * 1000)
             body_snippet = captured.decode("utf-8", errors="replace")
             response_headers = {k: v for k, v in response.headers.items()}
@@ -92,6 +93,8 @@ class HttpxSender:
                 headers=response_headers,
                 body_snippet=body_snippet,
                 duration_ms=duration_ms,
+                body=bytes(captured),
+                body_truncated=truncated,
             )
         finally:
             await response.aclose()

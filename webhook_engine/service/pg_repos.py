@@ -58,6 +58,14 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt
 
 
+_COLUMNS = (
+    "delivery_id, subscription_id, owner_id, event_name, event_id, schema_version, tenant_id, "
+    "data_json, emitted_at, target_url, resolved_ip, redelivery_of, attempts, fire_at, created_at, "
+    "status, lease_expiry, profile, secret_version"
+)
+"""Every column a delivery row is read and written with: one list, four statements."""
+
+
 def _row_to_delivery(row: object) -> DeliveryRecord:
     """Map a SQLAlchemy ``Row`` to :class:`DeliveryRecord`."""
     return DeliveryRecord(
@@ -77,6 +85,8 @@ def _row_to_delivery(row: object) -> DeliveryRecord:
         fire_at=_ensure_utc(row.fire_at),  # type: ignore[attr-defined]
         created_at=_ensure_utc(row.created_at),  # type: ignore[attr-defined]
         status=DeliveryStatus(row.status),  # type: ignore[attr-defined]
+        profile=row.profile,  # type: ignore[attr-defined]
+        secret_version=row.secret_version,  # type: ignore[attr-defined]
     )
 
 
@@ -92,7 +102,24 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
 
     def __init__(self, session: AsyncSession, table: str) -> None:
         self._s = session
-        self._t = table
+        self._t = _validate_table_name(table)
+
+    async def dead_unnotified(self, limit: int) -> list[DeliveryRecord]:
+        result = await self._s.execute(
+            text(
+                f"SELECT * FROM {self._t} WHERE status = 'dead_lettered' AND failure_notified_at IS NULL ORDER BY created_at, delivery_id LIMIT :limit FOR UPDATE SKIP LOCKED"
+            ),
+            {"limit": limit},
+        )
+        return [_row_to_delivery(row) for row in result]
+
+    async def ack_failure_notification(self, delivery_id: str, now: datetime) -> None:
+        await self._s.execute(
+            text(
+                f"UPDATE {self._t} SET failure_notified_at = :now WHERE delivery_id = :id AND status = 'dead_lettered'"
+            ),
+            {"id": delivery_id, "now": now},
+        )
 
     async def enqueue_many(self, records: Sequence[DeliveryRecord]) -> int:
         """Bulk-insert *records* as PENDING; duplicate delivery_id is a no-op."""
@@ -101,15 +128,12 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
 
         stmt = text(f"""
             INSERT INTO {self._t} (
-                delivery_id, subscription_id, owner_id, event_name, event_id,
-                schema_version, tenant_id, data_json, emitted_at, target_url,
-                resolved_ip, redelivery_of, attempts, fire_at, created_at,
-                status, lease_expiry
+                {_COLUMNS}
             ) VALUES (
                 :delivery_id, :subscription_id, :owner_id, :event_name, :event_id,
                 :schema_version, :tenant_id, :data_json, :emitted_at, :target_url,
                 :resolved_ip, :redelivery_of, :attempts, :fire_at, :created_at,
-                :status, NULL
+                :status, NULL, :profile, :secret_version
             )
             ON CONFLICT (delivery_id) DO NOTHING
         """)
@@ -132,6 +156,8 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
                 "fire_at": r.fire_at,
                 "created_at": r.created_at,
                 "status": DeliveryStatus.PENDING.value,
+                "profile": r.profile,
+                "secret_version": r.secret_version,
             }
             for r in records
         ]
@@ -177,10 +203,7 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
                 lease_expiry = :lease_expiry
             WHERE delivery_id = ANY(:ids)
             RETURNING
-                delivery_id, subscription_id, owner_id, event_name, event_id,
-                schema_version, tenant_id, data_json, emitted_at, target_url,
-                resolved_ip, redelivery_of, attempts, fire_at, created_at,
-                status, lease_expiry
+                {_COLUMNS}
         """)
 
         result = await self._s.execute(select_stmt, {"now": now, "batch_size": batch_size})
@@ -223,6 +246,39 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
                 count=count,
             )
         return count
+
+    async def purge_sent(self, older_than: datetime, limit: int, attempts_table: str) -> int:
+        if limit <= 0:
+            raise ValueError("Purge limit must be positive")
+        deliveries = _validate_table_name(self._t)
+        attempts = _validate_table_name(attempts_table)
+        rows = await self._s.execute(
+            text(f"""
+            SELECT d.delivery_id FROM {deliveries} AS d
+            WHERE d.status = 'sent' AND d.created_at < :older_than
+              AND EXISTS (
+                SELECT 1 FROM {attempts} AS a
+                WHERE a.delivery_id = d.delivery_id AND a.attempted_at < :older_than
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM {attempts} AS a
+                WHERE a.delivery_id = d.delivery_id AND a.attempted_at >= :older_than
+              )
+            ORDER BY d.created_at, d.delivery_id
+            LIMIT :limit FOR UPDATE OF d SKIP LOCKED
+        """),
+            {"older_than": older_than, "limit": limit},
+        )
+        ids = tuple(rows.scalars())
+        if not ids:
+            return 0
+        await self._s.execute(
+            text(f"DELETE FROM {attempts} WHERE delivery_id = ANY(:ids)"), {"ids": list(ids)}
+        )
+        await self._s.execute(
+            text(f"DELETE FROM {deliveries} WHERE delivery_id = ANY(:ids)"), {"ids": list(ids)}
+        )
+        return len(ids)
 
     async def mark_sent(self, delivery_id: str, attempt: AttemptRecord) -> None:
         """Transition *delivery_id* to SENT (terminal)."""
@@ -313,10 +369,7 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
         """Fetch a single delivery row by primary key, or ``None``."""
         stmt = text(f"""
             SELECT
-                delivery_id, subscription_id, owner_id, event_name, event_id,
-                schema_version, tenant_id, data_json, emitted_at, target_url,
-                resolved_ip, redelivery_of, attempts, fire_at, created_at,
-                status, lease_expiry
+                {_COLUMNS}
             FROM {self._t}
             WHERE delivery_id = :delivery_id
         """)
@@ -332,10 +385,7 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
         """Return the most-recent *limit* deliveries for *sub_id*, newest first."""
         stmt = text(f"""
             SELECT
-                delivery_id, subscription_id, owner_id, event_name, event_id,
-                schema_version, tenant_id, data_json, emitted_at, target_url,
-                resolved_ip, redelivery_of, attempts, fire_at, created_at,
-                status, lease_expiry
+                {_COLUMNS}
             FROM {self._t}
             WHERE subscription_id = :sub_id
             ORDER BY created_at DESC
@@ -389,85 +439,41 @@ class PgAttemptRepo(WebhookAttemptRepoProtocol):
         )
 
 
-async def ensure_delivery_schema(
-    engine: AsyncEngine,
-    deliveries_table: str,
-    attempts_table: str,
-) -> None:
-    """CREATE TABLE IF NOT EXISTS for deliveries + attempts, plus all indexes.
-
-    Safe to call on every startup — all DDL is idempotent.
-
-    Args:
-        engine: Live async engine pointed at the target database.
-        deliveries_table: Safe SQL identifier for the deliveries table.
-        attempts_table: Safe SQL identifier for the attempts table.
-    """
+def delivery_schema_sql(deliveries: str, attempts: str) -> list[str]:
+    deliveries_table = deliveries
+    attempts_table = attempts
     _validate_table_name(deliveries_table)
     _validate_table_name(attempts_table)
-
-    ddl_deliveries = text(f"""
-        CREATE TABLE IF NOT EXISTS {deliveries_table} (
-            delivery_id    TEXT        NOT NULL PRIMARY KEY,
-            subscription_id TEXT       NOT NULL,
-            owner_id       TEXT        NOT NULL,
-            event_name     TEXT        NOT NULL,
-            event_id       TEXT        NOT NULL,
-            schema_version TEXT        NOT NULL,
-            tenant_id      TEXT,
-            data_json      BYTEA       NOT NULL,
-            emitted_at     TIMESTAMPTZ NOT NULL,
-            target_url     TEXT        NOT NULL,
-            resolved_ip    TEXT        NOT NULL,
-            redelivery_of  TEXT,
-            attempts       INT         NOT NULL DEFAULT 0,
-            fire_at        TIMESTAMPTZ NOT NULL,
-            created_at     TIMESTAMPTZ NOT NULL,
-            status         TEXT        NOT NULL DEFAULT 'pending',
-            lease_expiry   TIMESTAMPTZ
-        )
-    """)
-
-    ddl_deliveries_idx_status = text(f"""
-        CREATE INDEX IF NOT EXISTS {deliveries_table}_status_fire_at_idx
-            ON {deliveries_table} (status, fire_at)
-    """)
-
-    ddl_deliveries_idx_sub = text(f"""
-        CREATE INDEX IF NOT EXISTS {deliveries_table}_subscription_created_at_idx
-            ON {deliveries_table} (subscription_id, created_at)
-    """)
-
-    ddl_attempts = text(f"""
-        CREATE TABLE IF NOT EXISTS {attempts_table} (
-            id               BIGSERIAL   PRIMARY KEY,
-            delivery_id      TEXT        NOT NULL,
-            attempt          INT         NOT NULL,
-            attempted_at     TIMESTAMPTZ NOT NULL,
-            http_code        INT,
-            duration_ms      INT         NOT NULL,
-            error            TEXT,
-            response_snippet TEXT
-        )
-    """)
-
-    ddl_attempts_idx = text(f"""
-        CREATE INDEX IF NOT EXISTS {attempts_table}_delivery_id_idx
-            ON {attempts_table} (delivery_id)
-    """)
-
-    async with engine.begin() as conn:
-        await conn.execute(ddl_deliveries)
-        await conn.execute(ddl_deliveries_idx_status)
-        await conn.execute(ddl_deliveries_idx_sub)
-        await conn.execute(ddl_attempts)
-        await conn.execute(ddl_attempts_idx)
-
-    logger.info(
-        "pg_repos.schema_ensured",
-        deliveries_table=deliveries_table,
-        attempts_table=attempts_table,
+    ddl_deliveries = f"\n        CREATE TABLE IF NOT EXISTS {deliveries_table} (\n            delivery_id    TEXT        NOT NULL PRIMARY KEY,\n            subscription_id TEXT       NOT NULL,\n            owner_id       TEXT        NOT NULL,\n            event_name     TEXT        NOT NULL,\n            event_id       TEXT        NOT NULL,\n            schema_version TEXT        NOT NULL,\n            tenant_id      TEXT,\n            data_json      BYTEA       NOT NULL,\n            emitted_at     TIMESTAMPTZ NOT NULL,\n            target_url     TEXT        NOT NULL,\n            resolved_ip    TEXT        NOT NULL,\n            redelivery_of  TEXT,\n            attempts       INT         NOT NULL DEFAULT 0,\n            fire_at        TIMESTAMPTZ NOT NULL,\n            created_at     TIMESTAMPTZ NOT NULL,\n            status         TEXT        NOT NULL DEFAULT 'pending',\n            lease_expiry   TIMESTAMPTZ,\n            profile        TEXT        NOT NULL DEFAULT 'default',\n            secret_version TEXT\n        )\n    "
+    ddl_deliveries_profile = f"\n        ALTER TABLE {deliveries_table}\n            ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'default',\n            ADD COLUMN IF NOT EXISTS secret_version TEXT\n    "
+    ddl_deliveries_idx_status = f"\n        CREATE INDEX IF NOT EXISTS {deliveries_table}_status_fire_at_idx\n            ON {deliveries_table} (status, fire_at)\n    "
+    ddl_deliveries_idx_sub = f"\n        CREATE INDEX IF NOT EXISTS {deliveries_table}_subscription_created_at_idx\n            ON {deliveries_table} (subscription_id, created_at)\n    "
+    ddl_attempts = f"\n        CREATE TABLE IF NOT EXISTS {attempts_table} (\n            id               BIGSERIAL   PRIMARY KEY,\n            delivery_id      TEXT        NOT NULL,\n            attempt          INT         NOT NULL,\n            attempted_at     TIMESTAMPTZ NOT NULL,\n            http_code        INT,\n            duration_ms      INT         NOT NULL,\n            error            TEXT,\n            response_snippet TEXT\n        )\n    "
+    ddl_attempts_idx = f"\n        CREATE INDEX IF NOT EXISTS {attempts_table}_delivery_id_idx\n            ON {attempts_table} (delivery_id)\n    "
+    ddl_sent_idx = f"CREATE INDEX IF NOT EXISTS {deliveries_table}_sent_created_idx ON {deliveries_table} (created_at, delivery_id) WHERE status = 'sent'"
+    ddl_failure_notification = (
+        f"ALTER TABLE {deliveries_table} ADD COLUMN IF NOT EXISTS failure_notified_at TIMESTAMPTZ"
     )
+    ddl_unnotified_idx = f"CREATE INDEX IF NOT EXISTS {deliveries_table}_unnotified_dead_idx ON {deliveries_table} (created_at, delivery_id) WHERE status = 'dead_lettered' AND failure_notified_at IS NULL"
+    return [
+        ddl_deliveries,
+        ddl_deliveries_profile,
+        ddl_deliveries_idx_status,
+        ddl_deliveries_idx_sub,
+        ddl_attempts,
+        ddl_attempts_idx,
+        ddl_sent_idx,
+        ddl_failure_notification,
+        ddl_unnotified_idx,
+    ]
+
+
+async def ensure_delivery_schema(
+    engine: AsyncEngine, deliveries_table: str, attempts_table: str
+) -> None:
+    async with engine.begin() as connection:
+        for statement in delivery_schema_sql(deliveries_table, attempts_table):
+            await connection.execute(text(statement))
 
 
 def make_pg_delivery_store(

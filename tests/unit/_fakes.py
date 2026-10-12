@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 from webhook_engine import (
+    DEFAULT_PROFILE,
     DeliveryPolicy,
     DeliveryRecord,
     DeliveryStatus,
     HmacSigner,
     HostSemaphorePool,
     HttpSendResult,
+    ProfileRegistry,
     SecretMaterial,
     SecretReaderProtocol,
     UrlSafetyValidator,
@@ -37,8 +41,18 @@ class FakeSecretReader(SecretReaderProtocol):
 class RecordingSender:
     """Captures what would have gone on the wire; answers 202 with a body."""
 
-    def __init__(self, status: int = 202) -> None:
+    def __init__(
+        self,
+        status: int = 202,
+        *,
+        headers: dict[str, str] | None = None,
+        body: bytes = b'{"verdict":"spam"}',
+        truncated: bool = False,
+    ) -> None:
         self.status = status
+        self.headers = headers or {}
+        self.body = body
+        self.truncated = truncated
         self.calls: list[dict[str, object]] = []
 
     async def post(
@@ -53,12 +67,16 @@ class RecordingSender:
         total_timeout_s: float,
         max_response_bytes: int,
     ) -> HttpSendResult:
-        self.calls.append({"url": url, "headers": headers, "resolved_ip": resolved_ip})
+        self.calls.append(
+            {"url": url, "headers": headers, "resolved_ip": resolved_ip, "body": body}
+        )
         return HttpSendResult(
             status=self.status,
-            headers={},
-            body_snippet='{"verdict":"spam"}',
+            headers=self.headers,
+            body_snippet=self.body.decode(),
             duration_ms=1,
+            body=self.body,
+            body_truncated=self.truncated,
         )
 
 
@@ -68,6 +86,8 @@ def make_record(
     target_url: str = "https://example.com/hook",
     resolved_ip: str = PUBLIC_IP,
     attempts: int = 0,
+    profile: str = DEFAULT_PROFILE,
+    secret_version: str | None = None,
 ) -> DeliveryRecord:
     stamp = now_utc()
     return DeliveryRecord(
@@ -87,6 +107,8 @@ def make_record(
         fire_at=stamp,
         created_at=stamp,
         status=DeliveryStatus.PENDING,
+        profile=profile,
+        secret_version=secret_version,
     )
 
 
@@ -96,6 +118,9 @@ def make_dispatcher(
     sender: RecordingSender,
     config: WebhookPolicyConfig | None = None,
     resolver: object | None = None,
+    profiles: ProfileRegistry[Any] | None = None,
+    secret_reader: SecretReaderProtocol | None = None,
+    clock: Callable[[], datetime] = now_utc,
 ) -> WebhookDispatcher:
     cfg = config or WebhookPolicyConfig()
     return WebhookDispatcher(
@@ -104,9 +129,10 @@ def make_dispatcher(
         policy=DeliveryPolicy(),
         config=cfg,
         store=store,
-        secret_reader=FakeSecretReader(),
+        secret_reader=secret_reader or FakeSecretReader(),
         ssrf_guard=UrlSafetyValidator(cfg.security),
         host_sem=HostSemaphorePool(cfg.limits),
-        clock=now_utc,
+        clock=clock,
         resolver=resolver,  # type: ignore[arg-type]
+        profiles=profiles,
     )

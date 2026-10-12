@@ -107,14 +107,18 @@ def test_verify_webhook_delegates_to_the_given_signer() -> None:
 
 def test_default_path_is_byte_for_byte_unchanged() -> None:
     """The seam must not move the shipped format — existing receivers keep working."""
-    signed = HmacSigner().sign(
-        delivery_id="d1",
-        event_name="order.paid",
-        event_id="ev1",
-        body=BODY,
-        secret=SECRET,
-        now=_now(),
-    ).as_dict()
+    signed = (
+        HmacSigner()
+        .sign(
+            delivery_id="d1",
+            event_name="order.paid",
+            event_id="ev1",
+            body=BODY,
+            secret=SECRET,
+            now=_now(),
+        )
+        .as_dict()
+    )
 
     assert set(signed) == {
         "Webhook-Id",

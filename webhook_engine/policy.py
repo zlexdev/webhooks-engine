@@ -8,6 +8,8 @@ translates it into queue transitions.
 from __future__ import annotations
 
 import random
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import ClassVar
 
 import httpx
@@ -15,7 +17,23 @@ import httpx
 from webhook_engine.config import WebhookRetryConfig
 from webhook_engine.enums import DeliveryStatus, RetryReason
 
-__all__ = ["DeliveryPolicy"]
+__all__ = ["DeliveryPolicy", "parse_retry_after"]
+
+
+def parse_retry_after(raw: str | None, *, now: datetime) -> float | None:
+    """`Retry-After` as seconds or an HTTP-date; anything else is ignored (`None`)."""
+    if raw is None or not raw.strip():
+        return None
+    text = raw.strip()
+    if text.isdigit():
+        return float(text)
+    try:
+        at = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if at.tzinfo is None:
+        return None
+    return max(0.0, (at - now).total_seconds())
 
 
 class DeliveryPolicy:
@@ -58,7 +76,12 @@ class DeliveryPolicy:
         attempt: int,
         cfg: WebhookRetryConfig,
         rng: random.Random | None = None,
+        *,
+        retry_after_s: float | None = None,
     ) -> float:
+        """`retry_after_s` — the receiver named the wait: honoured up to the cap, no jitter."""
+        if retry_after_s is not None:
+            return min(retry_after_s, cfg.max_delay_s)
         r = rng or random
         base = cfg.base_delay_s * (cfg.backoff_factor ** max(attempt - 1, 0))
         capped = min(base, cfg.max_delay_s)

@@ -233,6 +233,8 @@ Scaling, durability, rollback: [docs/runbooks/deploy.md](docs/runbooks/deploy.md
 
 ## Docs
 
+- [PostgreSQL migrations, retention and failure receipts](docs/reference/postgres-maintenance.md)
+
 - [Quickstart](docs/usage/quickstart.md) · [Library wiring](docs/usage/library.md) · [Microservice & HTTP API](docs/usage/microservice.md)
 - [Reference](docs/reference/) · [Runbooks](docs/runbooks/deploy.md)
 

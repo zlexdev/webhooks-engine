@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -25,7 +26,7 @@ from webhook_engine._shared.logging import get_logger
 from webhook_engine.config import WebhookStorageConfig
 from webhook_engine.enums import DeliveryStatus
 from webhook_engine.stores.base import BaseWebhookDeliveryStore
-from webhook_engine.types import AttemptRecord, DeliveryRecord
+from webhook_engine.types import DEFAULT_PROFILE, AttemptRecord, DeliveryRecord
 
 __all__ = ["RedisWebhookDeliveryStore"]
 
@@ -84,6 +85,8 @@ def _record_to_hash(record: DeliveryRecord) -> dict[str, str]:
         "fire_at_ms": str(_to_ms(record.fire_at)),
         "created_at_ms": str(_to_ms(record.created_at)),
         "status": record.status.value,
+        "profile": record.profile,
+        "secret_version": record.secret_version or "",
     }
 
 
@@ -111,6 +114,8 @@ def _hash_to_record(h: dict[bytes | str, bytes | str]) -> DeliveryRecord:
         fire_at=_from_ms(int(_s("fire_at_ms") or "0")),
         created_at=_from_ms(int(_s("created_at_ms") or "0")),
         status=DeliveryStatus(_s("status") or DeliveryStatus.PENDING.value),
+        profile=_s("profile") or DEFAULT_PROFILE,
+        secret_version=_s("secret_version") or None,
     )
 
 
@@ -210,26 +215,7 @@ class RedisWebhookDeliveryStore(BaseWebhookDeliveryStore):
                 self._log.warn("claim_orphan_row", delivery_id=did)
                 continue
             record = _hash_to_record(row)
-            records.append(
-                DeliveryRecord(
-                    delivery_id=record.delivery_id,
-                    subscription_id=record.subscription_id,
-                    owner_id=record.owner_id,
-                    event_name=record.event_name,
-                    event_id=record.event_id,
-                    schema_version=record.schema_version,
-                    tenant_id=record.tenant_id,
-                    data_json=record.data_json,
-                    emitted_at=record.emitted_at,
-                    target_url=record.target_url,
-                    resolved_ip=record.resolved_ip,
-                    redelivery_of=record.redelivery_of,
-                    attempts=record.attempts,
-                    fire_at=record.fire_at,
-                    created_at=record.created_at,
-                    status=DeliveryStatus.IN_FLIGHT,
-                )
-            )
+            records.append(replace(record, status=DeliveryStatus.IN_FLIGHT))
         if records:
             pipe = self._r.pipeline(transaction=False)
             for r in records:

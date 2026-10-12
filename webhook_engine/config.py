@@ -36,7 +36,7 @@ class WebhookSecurityConfig:
     blocked_cidrs: tuple[str, ...] = (
         # "this host" — 0.0.0.0 and :: reach the local machine on Linux and are
         # not covered by the loopback ranges below.
-        "0.0.0.0/32",
+        "0.0.0.0/8",
         "::/128",
         "127.0.0.0/8",
         "10.0.0.0/8",
@@ -44,9 +44,18 @@ class WebhookSecurityConfig:
         "192.168.0.0/16",
         "169.254.0.0/16",
         "100.64.0.0/10",
+        "198.18.0.0/15",
+        "224.0.0.0/4",
+        "240.0.0.0/4",
+        "255.255.255.255/32",
         "::1/128",
         "fc00::/7",
         "fe80::/10",
+        "ff00::/8",
+        "64:ff9b::/96",
+        "2002::/16",
+        # v4-mapped: the guard checks the embedded v4 address, so this entry only
+        # catches a mapped form the unwrapping did not see.
         "::ffff:0:0/96",
     )
     # Opt-in host allow-list. None = only deny-list applies.
