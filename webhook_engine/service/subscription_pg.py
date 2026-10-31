@@ -46,6 +46,8 @@ from sqlalchemy import text
 
 from webhook_engine.enums import SubscriptionStatus
 from webhook_engine.protocols import (
+    IdentityCipher,
+    SecretCipher,
     SecretMaterial,
     SecretReaderProtocol,
     SubscriptionReaderProtocol,
@@ -88,8 +90,15 @@ class PgSubscriptionStore:
     validated — no f-strings appear inside ``text()`` call sites.
     """
 
-    def __init__(self, engine: AsyncEngine, table: str = _DEFAULT_TABLE) -> None:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        table: str = _DEFAULT_TABLE,
+        *,
+        cipher: SecretCipher | None = None,
+    ) -> None:
         self._engine = engine
+        self._cipher: SecretCipher = cipher or IdentityCipher()
         t = _validate_identifier(table)  # raises ValueError on bad names
 
         self._sql_create_table = (
@@ -116,6 +125,7 @@ class PgSubscriptionStore:
             + t
             + " WHERE events @> CAST(:event_json AS jsonb) AND status = :status"
         )
+        self._sql_for_event_owner = self._sql_for_event + " AND owner_id = :owner_id"
         self._sql_get_secret = "SELECT secret FROM " + t + " WHERE id = :id"
         self._sql_insert = (
             "INSERT INTO "
@@ -142,21 +152,26 @@ class PgSubscriptionStore:
     async def for_event(
         self,
         event_name: str,
-        tenant_id: str | None,  # noqa: ARG002 — reserved for future multi-tenant filtering
+        tenant_id: str | None,
     ) -> list[SubscriptionSnapshot]:
         """Return active subscriptions interested in *event_name*.
 
-        Uses the JSONB containment operator ``@>`` with the GIN index.
+        Only owner *tenant_id*'s when it is given; ``tenant_id=None`` = every owner (a
+        single-owner deployment). Uses ``@>`` with the GIN index.
         """
+        params: dict[str, str] = {
+            "event_json": json.dumps([event_name]),
+            "status": SubscriptionStatus.ACTIVE.value,
+        }
+        sql = self._sql_for_event
+        if tenant_id is not None:
+            sql, params["owner_id"] = self._sql_for_event_owner, tenant_id
         async with self._engine.connect() as conn:
             rows = (
                 (
                     await conn.execute(
-                        text(self._sql_for_event),
-                        {
-                            "event_json": json.dumps([event_name]),
-                            "status": SubscriptionStatus.ACTIVE.value,
-                        },
+                        text(sql),
+                        params,
                     )
                 )
                 .mappings()
@@ -184,7 +199,7 @@ class PgSubscriptionStore:
         if row is None:
             raise KeyError(f"subscription not found: {subscription_id!r}")
         return SecretMaterial(
-            current=row["secret"],
+            current=self._cipher.open(row["secret"]),
             previous=None,
             previous_expires_at=None,
         )
@@ -211,7 +226,7 @@ class PgSubscriptionStore:
                     "id": sub_id,
                     "owner_id": owner_id,
                     "url": url,
-                    "secret": sub_secret,
+                    "secret": self._cipher.seal(sub_secret),
                     "events": json.dumps(events),
                     "status": SubscriptionStatus.ACTIVE.value,
                     "created_at": now,
@@ -236,7 +251,7 @@ class PgSubscriptionStore:
             row = (await conn.execute(text(self._sql_get), {"id": sub_id})).mappings().first()
         if row is None:
             return None
-        return _row_to_sub(row)
+        return _row_to_sub(row, self._cipher)
 
     async def list_for_owner(self, owner_id: str) -> list[Subscription]:
         async with self._engine.connect() as conn:
@@ -245,7 +260,7 @@ class PgSubscriptionStore:
                 .mappings()
                 .all()
             )
-        return [_row_to_sub(r) for r in rows]
+        return [_row_to_sub(r, self._cipher) for r in rows]
 
     async def delete(self, sub_id: str) -> bool:
         async with self._engine.begin() as conn:
@@ -297,7 +312,7 @@ def make_pg_readers(
     return _PgSubscriptionReader(store), _PgSecretReader(store)
 
 
-def _row_to_sub(row: object) -> Subscription:
+def _row_to_sub(row: object, cipher: SecretCipher) -> Subscription:
     """Convert a SQLAlchemy ``RowMapping`` to a ``Subscription`` dataclass."""
     events_raw = row["events"]  # type: ignore[index]
     if isinstance(events_raw, str):
@@ -314,7 +329,7 @@ def _row_to_sub(row: object) -> Subscription:
         id=row["id"],  # type: ignore[index]
         owner_id=row["owner_id"],  # type: ignore[index]
         url=row["url"],  # type: ignore[index]
-        secret=row["secret"],  # type: ignore[index]
+        secret=cipher.open(row["secret"]),  # type: ignore[index]
         events=tuple(events_list),
         status=SubscriptionStatus(row["status"]),  # type: ignore[index]
         created_at=created_at,

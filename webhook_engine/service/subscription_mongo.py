@@ -68,15 +68,18 @@ class MongoSubscriptionStore:
     async def for_event(
         self,
         event_name: str,
-        _tenant_id: str | None,  # noqa: ARG002 — reserved for future multi-tenant filtering
+        tenant_id: str | None,
     ) -> list[SubscriptionSnapshot]:
-        """Return active subscriptions interested in *event_name*.
+        """Return active subscriptions interested in *event_name*, of owner *tenant_id* if given.
 
         MongoDB matches *event_name* against the ``events`` array via the
-        multikey index (equality match on an array field).
+        multikey index (equality match on an array field). ``tenant_id=None`` = every owner.
         """
+        query: dict[str, str] = {"events": event_name, "status": SubscriptionStatus.ACTIVE.value}
+        if tenant_id is not None:
+            query["owner_id"] = tenant_id
         cursor = self._col.find(
-            {"events": event_name, "status": SubscriptionStatus.ACTIVE.value},
+            query,
             {"_id": 1, "owner_id": 1, "url": 1, "resolved_ip": 1},
         )
         results: list[SubscriptionSnapshot] = []
