@@ -64,8 +64,12 @@ class RedisSubscriptionStore:
     async def for_event(
         self,
         event_name: str,
-        _tenant_id: str | None,  # noqa: ARG002
+        tenant_id: str | None,
     ) -> list[SubscriptionSnapshot]:
+        """Active subscriptions of *event_name*, of owner *tenant_id* if given, else every owner.
+
+        Filtered after the read: the event set holds every owner's ids.
+        """
         key = f"{_PREFIX}:event:{event_name}:subs"
         sub_ids: set[bytes] = await self._r.smembers(key)  # type: ignore[assignment]  # redis-py stubs: returns Awaitable[T]|T
         if not sub_ids:
@@ -82,6 +86,8 @@ class RedisSubscriptionStore:
                 continue
             status_raw = row.get(b"status", b"").decode()
             if status_raw != SubscriptionStatus.ACTIVE.value:
+                continue
+            if tenant_id is not None and row[b"owner_id"].decode() != tenant_id:
                 continue
             result.append(
                 SubscriptionSnapshot(

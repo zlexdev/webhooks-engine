@@ -116,6 +116,7 @@ class PgSubscriptionStore:
             + t
             + " WHERE events @> CAST(:event_json AS jsonb) AND status = :status"
         )
+        self._sql_for_event_owner = self._sql_for_event + " AND owner_id = :owner_id"
         self._sql_get_secret = "SELECT secret FROM " + t + " WHERE id = :id"
         self._sql_insert = (
             "INSERT INTO "
@@ -142,21 +143,26 @@ class PgSubscriptionStore:
     async def for_event(
         self,
         event_name: str,
-        tenant_id: str | None,  # noqa: ARG002 — reserved for future multi-tenant filtering
+        tenant_id: str | None,
     ) -> list[SubscriptionSnapshot]:
         """Return active subscriptions interested in *event_name*.
 
-        Uses the JSONB containment operator ``@>`` with the GIN index.
+        Only owner *tenant_id*'s when it is given; ``tenant_id=None`` = every owner (a
+        single-owner deployment). Uses ``@>`` with the GIN index.
         """
+        params: dict[str, str] = {
+            "event_json": json.dumps([event_name]),
+            "status": SubscriptionStatus.ACTIVE.value,
+        }
+        sql = self._sql_for_event
+        if tenant_id is not None:
+            sql, params["owner_id"] = self._sql_for_event_owner, tenant_id
         async with self._engine.connect() as conn:
             rows = (
                 (
                     await conn.execute(
-                        text(self._sql_for_event),
-                        {
-                            "event_json": json.dumps([event_name]),
-                            "status": SubscriptionStatus.ACTIVE.value,
-                        },
+                        text(sql),
+                        params,
                     )
                 )
                 .mappings()
