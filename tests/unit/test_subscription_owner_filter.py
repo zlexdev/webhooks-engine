@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 from fakeredis import aioredis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from webhook_engine.service import subscription_pg, subscription_store
@@ -55,3 +56,29 @@ async def test_an_owner_event_reaches_only_that_owner(
     assert [s.id for s in only_a] == [a.id]
     assert {s.id for s in every} == {a.id, b.id}
     assert await store.for_event("order.paid", "owner-c") == []
+
+
+class _Reversed:
+    """A cipher whose stored form differs from the secret, to prove the store seals and opens."""
+
+    def seal(self, raw: str) -> str:
+        return raw[::-1]
+
+    def open(self, sealed: str) -> str:
+        return sealed[::-1]
+
+
+@pytest.mark.skipif(not _PG_URL, reason="WE_TEST_PG_URL not set")
+async def test_pg_store_keeps_the_secret_sealed_at_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subscription_pg, "_resolve_ip", _no_dns)
+    assert _PG_URL is not None
+    engine = create_async_engine(_PG_URL)
+    table = f"we_subs_{uuid4().hex[:8]}"
+    pg = PgSubscriptionStore(engine, table=table, cipher=_Reversed())
+    await pg.ensure_schema()
+    sub = await pg.create("owner-a", "https://a.example/hook", ["order.paid"], secret="s3cret")
+    async with engine.connect() as conn:
+        stored = (await conn.execute(text(f"SELECT secret FROM {table}"))).scalar_one()  # noqa: S608
+    assert stored == "terc3s"
+    assert (await pg.get_secret(sub.id)).current == "s3cret"
+    await engine.dispose()

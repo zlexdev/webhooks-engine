@@ -113,6 +113,28 @@ class SubscriptionReaderProtocol(ABC):
     ) -> list[SubscriptionSnapshot]: ...
 
 
+class SecretCipher(Protocol):
+    """How a subscription secret is kept at rest: ``seal`` before a write, ``open`` after a read.
+
+    The default :class:`IdentityCipher` stores it as given (today's rows open unchanged). A real
+    cipher (``corekit.seal.Sealer`` fits as is: str in, str out, rotation by a key list) needs
+    every existing row resealed before it is switched on.
+    """
+
+    def seal(self, raw: str) -> str: ...
+    def open(self, sealed: str) -> str: ...
+
+
+class IdentityCipher:
+    """The default :class:`SecretCipher`: the secret is stored as given."""
+
+    def seal(self, raw: str) -> str:
+        return raw
+
+    def open(self, sealed: str) -> str:
+        return sealed
+
+
 class SignerProtocol(ABC):
     """How a delivery is signed — and how a receiver checks that signature.
 
