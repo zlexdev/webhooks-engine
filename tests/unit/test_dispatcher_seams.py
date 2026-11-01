@@ -121,3 +121,33 @@ async def test_single_registry_keeps_the_config_retry(store: MemoryWebhookDelive
     await store.enqueue_many([record])
     outcome = await make_dispatcher(store=store, sender=sender).send(record)
     assert outcome.status is DeliveryStatus.DEAD_LETTERED
+
+
+class RotatingReader(FakeSecretReader):
+    """A secret mid-rotation: `until` is the end of the old secret's grace window."""
+
+    def __init__(self, until: datetime) -> None:
+        self.until = until
+
+    async def get(self, subscription_id: str) -> SecretMaterial:
+        return SecretMaterial(current="new", previous="old", previous_expires_at=self.until)
+
+    def invalidate(self, subscription_id: str) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("grace", "signatures"),
+    [(timedelta(hours=1), 2), (-timedelta(seconds=1), 1)],
+    ids=["open", "closed"],
+)
+async def test_the_old_secret_signs_too_only_inside_the_grace_window(
+    store: MemoryWebhookDeliveryStore, sender: RecordingSender, grace: timedelta, signatures: int
+) -> None:
+    record = make_record()
+    await store.enqueue_many([record])
+    reader = RotatingReader(datetime.now(UTC) + grace)
+    await make_dispatcher(store=store, sender=sender, secret_reader=reader).send(record)
+    headers = sender.calls[-1]["headers"]
+    assert isinstance(headers, dict)
+    assert len(str(headers["Webhook-Signature"]).split()) == signatures

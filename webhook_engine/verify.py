@@ -142,10 +142,15 @@ def verify_webhook(
         f"{ts}.{event_id}.{digest}".encode(),
         hashlib.sha256,
     ).hexdigest()
-    version, _, provided = sig.partition("=")
     # Same rule as HmacSigner.verify — the two must not drift: a bare mac with
     # no version label, or a label this build does not implement, is a reject.
-    if version != "v1" or not provided:
+    # Space-separated signatures (a secret rotation's grace window): any one may match.
+    macs = [
+        provided
+        for version, _, provided in (part.partition("=") for part in sig.split())
+        if version == "v1" and provided
+    ]
+    if not macs:
         raise WebhookVerificationError("unsupported signature version")
-    if not hmac.compare_digest(expected, provided):
+    if not any(hmac.compare_digest(expected, provided) for provided in macs):
         raise WebhookVerificationError("signature mismatch")

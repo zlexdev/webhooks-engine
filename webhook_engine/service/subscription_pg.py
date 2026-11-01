@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import structlog
-from sqlalchemy import text
+from sqlalchemy import RowMapping, text
 
 from webhook_engine.enums import SubscriptionStatus
 from webhook_engine.protocols import (
@@ -51,6 +51,7 @@ from webhook_engine.protocols import (
     SecretMaterial,
     SecretReaderProtocol,
     SubscriptionReaderProtocol,
+    grace_until,
 )
 from webhook_engine.service.subscription_store import Subscription, _resolve_ip  # noqa: PLC2701
 from webhook_engine.types import SubscriptionSnapshot
@@ -110,8 +111,21 @@ class PgSubscriptionStore:
             "events jsonb NOT NULL DEFAULT '[]'::jsonb, "
             "status text NOT NULL, "
             "created_at timestamptz NOT NULL, "
-            "resolved_ip text NOT NULL"
+            "resolved_ip text NOT NULL, "
+            "previous_secret text, "
+            "previous_expires_at timestamptz"
             ")"
+        )
+        # Tables made before rotation existed get the two columns on the next ensure_schema.
+        self._sql_add_previous = (
+            "ALTER TABLE " + t + " ADD COLUMN IF NOT EXISTS previous_secret text, "
+            "ADD COLUMN IF NOT EXISTS previous_expires_at timestamptz"
+        )
+        self._sql_rotate = (
+            "UPDATE "
+            + t
+            + " SET previous_secret = secret, previous_expires_at = :until, secret = :secret"
+            " WHERE id = :id RETURNING secret, previous_secret, previous_expires_at"
         )
         self._sql_create_idx_owner = (
             "CREATE INDEX IF NOT EXISTS " + t + "_owner_id_idx ON " + t + " (owner_id)"
@@ -126,7 +140,9 @@ class PgSubscriptionStore:
             + " WHERE events @> CAST(:event_json AS jsonb) AND status = :status"
         )
         self._sql_for_event_owner = self._sql_for_event + " AND owner_id = :owner_id"
-        self._sql_get_secret = "SELECT secret FROM " + t + " WHERE id = :id"
+        self._sql_get_secret = (
+            "SELECT secret, previous_secret, previous_expires_at FROM " + t + " WHERE id = :id"
+        )
         self._sql_insert = (
             "INSERT INTO "
             + t
@@ -145,6 +161,7 @@ class PgSubscriptionStore:
         """Create the subscriptions table and indexes if they do not exist."""
         async with self._engine.begin() as conn:
             await conn.execute(text(self._sql_create_table))
+            await conn.execute(text(self._sql_add_previous))
             await conn.execute(text(self._sql_create_idx_owner))
             await conn.execute(text(self._sql_create_idx_events))
         log.info("pg_subscription_store.schema_ensured", table=self._table)
@@ -198,11 +215,37 @@ class PgSubscriptionStore:
             )
         if row is None:
             raise KeyError(f"subscription not found: {subscription_id!r}")
+        return self._material(row)
+
+    def _material(self, row: RowMapping) -> SecretMaterial:
+        previous = row["previous_secret"]
         return SecretMaterial(
             current=self._cipher.open(row["secret"]),
-            previous=None,
-            previous_expires_at=None,
+            previous=self._cipher.open(previous) if previous is not None else None,
+            previous_expires_at=row["previous_expires_at"],
         )
+
+    async def rotate_secret(
+        self, sub_id: str, *, grace_s: int, secret: str | None = None
+    ) -> SecretMaterial:
+        """New secret now; the old one still signs deliveries for `grace_s` seconds."""
+        until = grace_until(datetime.now(UTC), grace_s)
+        new = secret or secrets.token_hex(32)
+        async with self._engine.begin() as conn:
+            row = (
+                (
+                    await conn.execute(
+                        text(self._sql_rotate),
+                        {"id": sub_id, "until": until, "secret": self._cipher.seal(new)},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            raise KeyError(f"subscription not found: {sub_id!r}")
+        log.info("pg_subscription_store.secret_rotated", sub_id=sub_id, grace_s=grace_s)
+        return self._material(row)
 
     def invalidate_secret(self, subscription_id: str) -> None:  # noqa: ARG002
         """No-op — PG store has no in-process secret cache."""

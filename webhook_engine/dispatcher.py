@@ -21,7 +21,7 @@ Hot path, per record:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -46,7 +46,13 @@ from webhook_engine.protocols import (
     WebhookDeliveryStoreProtocol,
 )
 from webhook_engine.ssrf_guard import UrlSafetyValidator
-from webhook_engine.types import AttemptRecord, DeliveryRecord, DispatchOutcome, HttpSendResult
+from webhook_engine.types import (
+    AttemptRecord,
+    DeliveryRecord,
+    DispatchOutcome,
+    HttpSendResult,
+    SignatureHeaders,
+)
 
 __all__ = ["WebhookDispatcher"]
 
@@ -159,7 +165,9 @@ class WebhookDispatcher:
                 response_snippet="",
             )
 
-        signed = self._build_signed(record, profile, secret.current, attempt_no, now)
+        signed = self._build_signed(
+            record, profile, secret.current, attempt_no, now, previous=secret.previous_at(now)
+        )
 
         send_result: HttpSendResult | None = None
         retry_reason: RetryReason | None = None
@@ -247,18 +255,35 @@ class WebhookDispatcher:
         secret: str,
         attempt_no: int,
         now: datetime,
+        *,
+        previous: str | None = None,
     ) -> _SignedDelivery:
+        """Sign with the current secret; during a rotation's grace window also with the old one.
+
+        Both signatures go into `Webhook-Signature`, space-separated (Standard Webhooks): a
+        consumer still on the
+        old secret keeps verifying until it switches.
+        """
         body = profile.body.encode(record, attempt=attempt_no)
         signer = profile.signer or self._signer
-        headers = signer.sign(
-            delivery_id=record.delivery_id,
-            event_name=record.event_name,
-            event_id=record.event_id,
-            body=body,
-            secret=secret,
-            now=now,
-        ).as_dict()
-        return _SignedDelivery(body=body, headers=headers)
+
+        def sign(key: str) -> SignatureHeaders:
+            return signer.sign(
+                delivery_id=record.delivery_id,
+                event_name=record.event_name,
+                event_id=record.event_id,
+                body=body,
+                secret=key,
+                now=now,
+            )
+
+        signed = sign(secret)
+        if previous is not None:
+            signed = replace(
+                signed,
+                webhook_signature=f"{signed.webhook_signature} {sign(previous).webhook_signature}",
+            )
+        return _SignedDelivery(body=body, headers=signed.as_dict())
 
     async def _dead_letter(
         self,

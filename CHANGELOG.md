@@ -6,6 +6,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `rotate_secret(sub_id, *, grace_s, secret=None)` on the Postgres, Redis and Mongo subscription stores: a new secret now, the old one keeps signing for `grace_s` seconds. The Postgres store adds `previous_secret` and `previous_expires_at` to existing tables on `ensure_schema`.
+- During a rotation's grace window `Webhook-Signature` carries both signatures, space-separated; `HmacSigner.verify` and `verify_webhook` accept any one.
+
 ## [0.2.0] — 2026-08-10
 
 First tagged release — `0.1.0` was documented but never tagged.

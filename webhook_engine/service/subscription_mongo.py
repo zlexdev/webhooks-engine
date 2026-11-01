@@ -36,6 +36,7 @@ from webhook_engine.protocols import (
     SecretMaterial,
     SecretReaderProtocol,
     SubscriptionReaderProtocol,
+    grace_until,
 )
 from webhook_engine.service.subscription_store import Subscription, _resolve_ip  # noqa: PLC2701
 from webhook_engine.types import SubscriptionSnapshot
@@ -96,14 +97,29 @@ class MongoSubscriptionStore:
         return results
 
     async def get_secret(self, subscription_id: str) -> SecretMaterial:
-        doc = await self._col.find_one({"_id": subscription_id}, {"secret": 1})
+        doc = await self._col.find_one(
+            {"_id": subscription_id}, {"secret": 1, "previous_secret": 1, "previous_expires_at": 1}
+        )
         if doc is None:
             raise KeyError(f"subscription not found: {subscription_id!r}")
-        return SecretMaterial(
-            current=doc["secret"],
-            previous=None,
-            previous_expires_at=None,
+        return _material(doc)
+
+    async def rotate_secret(
+        self, sub_id: str, *, grace_s: int, secret: str | None = None
+    ) -> SecretMaterial:
+        """New secret now; the old one still signs deliveries for `grace_s` seconds."""
+        until = grace_until(datetime.now(UTC), grace_s)
+        new = secret or secrets.token_hex(32)
+        doc = await self._col.find_one_and_update(
+            {"_id": sub_id},
+            [{"$set": {"previous_secret": "$secret", "previous_expires_at": until, "secret": new}}],
+            projection={"secret": 1, "previous_secret": 1, "previous_expires_at": 1},
+            # pymongo ReturnDocument.AFTER; pymongo is imported only under the mongo extra.
+            return_document=True,
         )
+        if doc is None:
+            raise KeyError(f"subscription not found: {sub_id!r}")
+        return _material(doc)
 
     def invalidate_secret(self, _subscription_id: str) -> None:  # noqa: ARG002
         """No-op — Mongo store has no in-process secret cache."""
@@ -223,3 +239,16 @@ def _doc_to_sub(doc: dict[str, Any]) -> Subscription:
         created_at=created_at,
         resolved_ip=doc["resolved_ip"],
     )
+
+
+def _material(doc: dict[str, Any]) -> SecretMaterial:
+    return SecretMaterial(
+        current=doc["secret"],
+        previous=doc.get("previous_secret"),
+        previous_expires_at=_aware(doc.get("previous_expires_at")),
+    )
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    """pymongo hands datetimes back naive (UTC) unless the client is tz_aware."""
+    return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value

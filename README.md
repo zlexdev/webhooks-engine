@@ -161,6 +161,12 @@ db.wh_events.insertMany([
 - **Signing** (`HmacSigner` / `verify_webhook`) — HMAC-SHA256 with a timestamp; a dependency-free `verify_webhook` helper ships for receivers.
 - **SSRF guard** (`UrlSafetyValidator`) — blocks RFC-1918 / link-local targets, re-checked at send time.
 
+### Rotating a subscription secret
+
+`await store.rotate_secret(sub_id, grace_s=86400)` gives the subscription a new secret now (or the one you pass as `secret=`). For `grace_s` seconds every delivery carries two signatures in `Webhook-Signature`, space-separated: `v1=<new> v1=<old>`. `HmacSigner.verify` and `verify_webhook` accept a header if any one matches, so a receiver switches to the new secret at its own pace. After the window the old secret is ignored on read; `grace_s=0` drops it at once.
+
+Receivers that parse the header themselves must split on spaces and try each `v1=` value.
+
 ## Install options
 
 | Command | Backend |

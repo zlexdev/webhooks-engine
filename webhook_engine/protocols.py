@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from webhook_engine.types import (
@@ -51,6 +51,23 @@ class SecretMaterial:
     current: str
     previous: str | None
     previous_expires_at: datetime | None
+
+    def previous_at(self, now: datetime) -> str | None:
+        """The old secret while its grace window is open at `now`; expired, it is dropped lazily."""
+        if (
+            self.previous is None
+            or self.previous_expires_at is None
+            or self.previous_expires_at <= now
+        ):
+            return None
+        return self.previous
+
+
+def grace_until(now: datetime, grace_s: int) -> datetime:
+    """End of a rotation's grace window; negative is refused, zero drops the old secret at once."""
+    if grace_s < 0:
+        raise ValueError("grace_s must be >= 0")
+    return now + timedelta(seconds=grace_s)
 
 
 class WebhookDeliveryStoreProtocol(ABC):

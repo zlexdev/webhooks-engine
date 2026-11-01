@@ -88,10 +88,16 @@ class HmacSigner(SignerProtocol):
             f"{ts}.{event_id}.{sha256_hex(body)}".encode(),
             hashlib.sha256,
         ).hexdigest()
-        version, _, provided = sig.partition("=")
+        # Space-separated signatures (a rotation's grace window signs with both secrets):
+        # any one may match.
         # Check the version label, not just the mac: without this a future
         # "v2=<mac>" — or an attacker's "v99=" — is accepted as v1.
-        if version != self._version.value or not provided:
+        macs = [
+            provided
+            for version, _, provided in (part.partition("=") for part in sig.split())
+            if version == self._version.value and provided
+        ]
+        if not macs:
             raise SignatureVerificationError("unsupported signature version")
-        if not hmac.compare_digest(expected, provided):
+        if not any(hmac.compare_digest(expected, provided) for provided in macs):
             raise SignatureVerificationError("bad mac")
