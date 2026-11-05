@@ -107,7 +107,9 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
     async def dead_unnotified(self, limit: int) -> list[DeliveryRecord]:
         result = await self._s.execute(
             text(
-                f"SELECT * FROM {self._t} WHERE status = 'dead_lettered' AND failure_notified_at IS NULL ORDER BY created_at, delivery_id LIMIT :limit FOR UPDATE SKIP LOCKED"
+                f"SELECT * FROM {self._t} WHERE status = 'dead_lettered'"
+                f" AND failure_notified_at IS NULL ORDER BY created_at, delivery_id LIMIT :limit"
+                f" FOR UPDATE SKIP LOCKED"
             ),
             {"limit": limit},
         )
@@ -116,7 +118,8 @@ class PgDeliveryRepo(WebhookDeliveryRepoProtocol):
     async def ack_failure_notification(self, delivery_id: str, now: datetime) -> None:
         await self._s.execute(
             text(
-                f"UPDATE {self._t} SET failure_notified_at = :now WHERE delivery_id = :id AND status = 'dead_lettered'"
+                f"UPDATE {self._t} SET failure_notified_at = :now WHERE delivery_id = :id"
+                f" AND status = 'dead_lettered'"
             ),
             {"id": delivery_id, "now": now},
         )
@@ -444,17 +447,69 @@ def delivery_schema_sql(deliveries: str, attempts: str) -> list[str]:
     attempts_table = attempts
     _validate_table_name(deliveries_table)
     _validate_table_name(attempts_table)
-    ddl_deliveries = f"\n        CREATE TABLE IF NOT EXISTS {deliveries_table} (\n            delivery_id    TEXT        NOT NULL PRIMARY KEY,\n            subscription_id TEXT       NOT NULL,\n            owner_id       TEXT        NOT NULL,\n            event_name     TEXT        NOT NULL,\n            event_id       TEXT        NOT NULL,\n            schema_version TEXT        NOT NULL,\n            tenant_id      TEXT,\n            data_json      BYTEA       NOT NULL,\n            emitted_at     TIMESTAMPTZ NOT NULL,\n            target_url     TEXT        NOT NULL,\n            resolved_ip    TEXT        NOT NULL,\n            redelivery_of  TEXT,\n            attempts       INT         NOT NULL DEFAULT 0,\n            fire_at        TIMESTAMPTZ NOT NULL,\n            created_at     TIMESTAMPTZ NOT NULL,\n            status         TEXT        NOT NULL DEFAULT 'pending',\n            lease_expiry   TIMESTAMPTZ,\n            profile        TEXT        NOT NULL DEFAULT 'default',\n            secret_version TEXT\n        )\n    "
-    ddl_deliveries_profile = f"\n        ALTER TABLE {deliveries_table}\n            ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'default',\n            ADD COLUMN IF NOT EXISTS secret_version TEXT\n    "
-    ddl_deliveries_idx_status = f"\n        CREATE INDEX IF NOT EXISTS {deliveries_table}_status_fire_at_idx\n            ON {deliveries_table} (status, fire_at)\n    "
-    ddl_deliveries_idx_sub = f"\n        CREATE INDEX IF NOT EXISTS {deliveries_table}_subscription_created_at_idx\n            ON {deliveries_table} (subscription_id, created_at)\n    "
-    ddl_attempts = f"\n        CREATE TABLE IF NOT EXISTS {attempts_table} (\n            id               BIGSERIAL   PRIMARY KEY,\n            delivery_id      TEXT        NOT NULL,\n            attempt          INT         NOT NULL,\n            attempted_at     TIMESTAMPTZ NOT NULL,\n            http_code        INT,\n            duration_ms      INT         NOT NULL,\n            error            TEXT,\n            response_snippet TEXT\n        )\n    "
-    ddl_attempts_idx = f"\n        CREATE INDEX IF NOT EXISTS {attempts_table}_delivery_id_idx\n            ON {attempts_table} (delivery_id)\n    "
-    ddl_sent_idx = f"CREATE INDEX IF NOT EXISTS {deliveries_table}_sent_created_idx ON {deliveries_table} (created_at, delivery_id) WHERE status = 'sent'"
+    ddl_deliveries = (
+        f"\n        CREATE TABLE IF NOT EXISTS {deliveries_table} (\n"
+        f"            delivery_id    TEXT        NOT NULL PRIMARY KEY,\n"
+        f"            subscription_id TEXT       NOT NULL,\n"
+        f"            owner_id       TEXT        NOT NULL,\n"
+        f"            event_name     TEXT        NOT NULL,\n"
+        f"            event_id       TEXT        NOT NULL,\n"
+        f"            schema_version TEXT        NOT NULL,\n"
+        f"            tenant_id      TEXT,\n"
+        f"            data_json      BYTEA       NOT NULL,\n"
+        f"            emitted_at     TIMESTAMPTZ NOT NULL,\n"
+        f"            target_url     TEXT        NOT NULL,\n"
+        f"            resolved_ip    TEXT        NOT NULL,\n"
+        f"            redelivery_of  TEXT,\n"
+        f"            attempts       INT         NOT NULL DEFAULT 0,\n"
+        f"            fire_at        TIMESTAMPTZ NOT NULL,\n"
+        f"            created_at     TIMESTAMPTZ NOT NULL,\n"
+        f"            status         TEXT        NOT NULL DEFAULT 'pending',\n"
+        f"            lease_expiry   TIMESTAMPTZ,\n"
+        f"            profile        TEXT        NOT NULL DEFAULT 'default',\n"
+        f"            secret_version TEXT\n        )\n    "
+    )
+    ddl_deliveries_profile = (
+        f"\n        ALTER TABLE {deliveries_table}\n"
+        f"            ADD COLUMN IF NOT EXISTS profile TEXT NOT NULL DEFAULT 'default',\n"
+        f"            ADD COLUMN IF NOT EXISTS secret_version TEXT\n    "
+    )
+    ddl_deliveries_idx_status = (
+        f"\n        CREATE INDEX IF NOT EXISTS {deliveries_table}_status_fire_at_idx\n"
+        f"            ON {deliveries_table} (status, fire_at)\n    "
+    )
+    ddl_deliveries_idx_sub = (
+        f"\n"
+        f"        CREATE INDEX IF NOT EXISTS {deliveries_table}_subscription_created_at_idx\n"
+        f"            ON {deliveries_table} (subscription_id, created_at)\n    "
+    )
+    ddl_attempts = (
+        f"\n        CREATE TABLE IF NOT EXISTS {attempts_table} (\n"
+        f"            id               BIGSERIAL   PRIMARY KEY,\n"
+        f"            delivery_id      TEXT        NOT NULL,\n"
+        f"            attempt          INT         NOT NULL,\n"
+        f"            attempted_at     TIMESTAMPTZ NOT NULL,\n"
+        f"            http_code        INT,\n"
+        f"            duration_ms      INT         NOT NULL,\n"
+        f"            error            TEXT,\n            response_snippet TEXT\n"
+        f"        )\n    "
+    )
+    ddl_attempts_idx = (
+        f"\n        CREATE INDEX IF NOT EXISTS {attempts_table}_delivery_id_idx\n"
+        f"            ON {attempts_table} (delivery_id)\n    "
+    )
+    ddl_sent_idx = (
+        f"CREATE INDEX IF NOT EXISTS {deliveries_table}_sent_created_idx"
+        f" ON {deliveries_table} (created_at, delivery_id) WHERE status = 'sent'"
+    )
     ddl_failure_notification = (
         f"ALTER TABLE {deliveries_table} ADD COLUMN IF NOT EXISTS failure_notified_at TIMESTAMPTZ"
     )
-    ddl_unnotified_idx = f"CREATE INDEX IF NOT EXISTS {deliveries_table}_unnotified_dead_idx ON {deliveries_table} (created_at, delivery_id) WHERE status = 'dead_lettered' AND failure_notified_at IS NULL"
+    ddl_unnotified_idx = (
+        f"CREATE INDEX IF NOT EXISTS {deliveries_table}_unnotified_dead_idx"
+        f" ON {deliveries_table} (created_at, delivery_id)"
+        f" WHERE status = 'dead_lettered' AND failure_notified_at IS NULL"
+    )
     return [
         ddl_deliveries,
         ddl_deliveries_profile,
