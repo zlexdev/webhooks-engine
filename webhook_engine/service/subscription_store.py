@@ -107,7 +107,7 @@ class RedisSubscriptionStore:
         return result
 
     async def get_secret(self, subscription_id: str) -> SecretMaterial:
-        current, previous, until = await self._r.hmget(  # type: ignore[misc]  # redis-py stubs: Awaitable[T]|T
+        current, previous, until = await self._r.hmget(
             f"{_PREFIX}:sub:{subscription_id}", ["secret", "previous_secret", "previous_expires_at"]
         )
         if not current:
@@ -128,7 +128,7 @@ class RedisSubscriptionStore:
             raise KeyError(f"subscription not found: {sub_id!r}")
         until = grace_until(datetime.now(UTC), grace_s)
         new = secret or secrets.token_hex(32)
-        await self._r.hset(  # type: ignore[misc]  # redis-py stubs: Awaitable[T]|T
+        await self._r.hset(
             key,
             mapping={
                 "secret": new,

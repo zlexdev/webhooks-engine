@@ -52,6 +52,7 @@ from webhook_engine.types import (
     DispatchOutcome,
     HttpSendResult,
     SignatureHeaders,
+    SignedHeaders,
 )
 
 __all__ = ["WebhookDispatcher"]
@@ -260,14 +261,14 @@ class WebhookDispatcher:
     ) -> _SignedDelivery:
         """Sign with the current secret; during a rotation's grace window also with the old one.
 
-        Both signatures go into `Webhook-Signature`, space-separated (Standard Webhooks): a
-        consumer still on the
-        old secret keeps verifying until it switches.
+        Both go into `Webhook-Signature`, space-separated (Standard Webhooks), so a consumer
+        still on the old secret keeps verifying. Only the shipped header set carries two: a
+        custom signer's own format may not allow it, so it signs with the current secret alone.
         """
         body = profile.body.encode(record, attempt=attempt_no)
         signer = profile.signer or self._signer
 
-        def sign(key: str) -> SignatureHeaders:
+        def sign(key: str) -> SignedHeaders:
             return signer.sign(
                 delivery_id=record.delivery_id,
                 event_name=record.event_name,
@@ -278,10 +279,11 @@ class WebhookDispatcher:
             )
 
         signed = sign(secret)
-        if previous is not None:
+        old = sign(previous) if previous is not None else None
+        if isinstance(signed, SignatureHeaders) and isinstance(old, SignatureHeaders):
             signed = replace(
                 signed,
-                webhook_signature=f"{signed.webhook_signature} {sign(previous).webhook_signature}",
+                webhook_signature=f"{signed.webhook_signature} {old.webhook_signature}",
             )
         return _SignedDelivery(body=body, headers=signed.as_dict())
 
