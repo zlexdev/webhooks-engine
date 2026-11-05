@@ -84,6 +84,7 @@ class WebhookEventRegistry:
         by_name: dict[str, str] = {}
 
         def walk(cls: type) -> None:
+            sub: type
             for sub in cls.__subclasses__():
                 if sub in seen:
                     continue

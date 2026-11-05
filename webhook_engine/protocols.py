@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from webhook_engine.types import (
@@ -51,6 +51,23 @@ class SecretMaterial:
     current: str
     previous: str | None
     previous_expires_at: datetime | None
+
+    def previous_at(self, now: datetime) -> str | None:
+        """The old secret while its grace window is open at `now`; expired, it is dropped lazily."""
+        if (
+            self.previous is None
+            or self.previous_expires_at is None
+            or self.previous_expires_at <= now
+        ):
+            return None
+        return self.previous
+
+
+def grace_until(now: datetime, grace_s: int) -> datetime:
+    """End of a rotation's grace window; negative is refused, zero drops the old secret at once."""
+    if grace_s < 0:
+        raise ValueError("grace_s must be >= 0")
+    return now + timedelta(seconds=grace_s)
 
 
 class WebhookDeliveryStoreProtocol(ABC):
@@ -111,6 +128,28 @@ class SubscriptionReaderProtocol(ABC):
         event_name: str,
         tenant_id: str | None,
     ) -> list[SubscriptionSnapshot]: ...
+
+
+class SecretCipher(Protocol):
+    """How a subscription secret is kept at rest: ``seal`` before a write, ``open`` after a read.
+
+    The default :class:`IdentityCipher` stores it as given (today's rows open unchanged). A real
+    cipher (``corekit.seal.Sealer`` fits as is: str in, str out, rotation by a key list) needs
+    every existing row resealed before it is switched on.
+    """
+
+    def seal(self, raw: str) -> str: ...
+    def open(self, sealed: str) -> str: ...
+
+
+class IdentityCipher:
+    """The default :class:`SecretCipher`: the secret is stored as given."""
+
+    def seal(self, raw: str) -> str:
+        return raw
+
+    def open(self, sealed: str) -> str:
+        return sealed
 
 
 class SignerProtocol(ABC):

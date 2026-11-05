@@ -27,8 +27,14 @@ from webhook_engine.protocols import (
     SecretMaterial,
     SecretReaderProtocol,
     SubscriptionReaderProtocol,
+    grace_until,
 )
 from webhook_engine.types import SubscriptionSnapshot
+
+
+def _text(value: bytes | str) -> str:
+    return value.decode() if isinstance(value, bytes) else value
+
 
 __all__ = [
     "RedisSubscriptionStore",
@@ -64,8 +70,12 @@ class RedisSubscriptionStore:
     async def for_event(
         self,
         event_name: str,
-        _tenant_id: str | None,  # noqa: ARG002
+        tenant_id: str | None,
     ) -> list[SubscriptionSnapshot]:
+        """Active subscriptions of *event_name*, of owner *tenant_id* if given, else every owner.
+
+        Filtered after the read: the event set holds every owner's ids.
+        """
         key = f"{_PREFIX}:event:{event_name}:subs"
         sub_ids: set[bytes] = await self._r.smembers(key)  # type: ignore[assignment]  # redis-py stubs: returns Awaitable[T]|T
         if not sub_ids:
@@ -83,6 +93,8 @@ class RedisSubscriptionStore:
             status_raw = row.get(b"status", b"").decode()
             if status_raw != SubscriptionStatus.ACTIVE.value:
                 continue
+            if tenant_id is not None and row[b"owner_id"].decode() != tenant_id:
+                continue
             result.append(
                 SubscriptionSnapshot(
                     id=row[b"id"].decode(),
@@ -95,14 +107,36 @@ class RedisSubscriptionStore:
         return result
 
     async def get_secret(self, subscription_id: str) -> SecretMaterial:
-        secret = await self._r.hget(f"{_PREFIX}:sub:{subscription_id}", "secret")
-        if not secret:
+        current, previous, until = await self._r.hmget(
+            f"{_PREFIX}:sub:{subscription_id}", ["secret", "previous_secret", "previous_expires_at"]
+        )
+        if not current:
             raise KeyError(f"subscription not found: {subscription_id!r}")
         return SecretMaterial(
-            current=secret.decode() if isinstance(secret, bytes) else secret,
-            previous=None,
-            previous_expires_at=None,
+            current=_text(current),
+            previous=_text(previous) if previous else None,
+            previous_expires_at=datetime.fromisoformat(_text(until)) if until else None,
         )
+
+    async def rotate_secret(
+        self, sub_id: str, *, grace_s: int, secret: str | None = None
+    ) -> SecretMaterial:
+        """New secret now; the old one still signs deliveries for `grace_s` seconds."""
+        key = f"{_PREFIX}:sub:{sub_id}"
+        old = await self._r.hget(key, "secret")
+        if not old:
+            raise KeyError(f"subscription not found: {sub_id!r}")
+        until = grace_until(datetime.now(UTC), grace_s)
+        new = secret or secrets.token_hex(32)
+        await self._r.hset(
+            key,
+            mapping={
+                "secret": new,
+                "previous_secret": _text(old),
+                "previous_expires_at": until.isoformat(),
+            },
+        )
+        return SecretMaterial(current=new, previous=_text(old), previous_expires_at=until)
 
     def invalidate_secret(self, _subscription_id: str) -> None:  # noqa: ARG002
         pass  # no cache to invalidate

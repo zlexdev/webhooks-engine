@@ -20,6 +20,7 @@ from webhook_engine import (
     WebhookRetryConfig,
     parse_retry_after,
 )
+from webhook_engine.signer import HmacSigner
 from webhook_engine.stores.memory import MemoryWebhookDeliveryStore
 
 NOW = datetime(2026, 10, 2, 12, tzinfo=UTC)
@@ -121,3 +122,64 @@ async def test_single_registry_keeps_the_config_retry(store: MemoryWebhookDelive
     await store.enqueue_many([record])
     outcome = await make_dispatcher(store=store, sender=sender).send(record)
     assert outcome.status is DeliveryStatus.DEAD_LETTERED
+
+
+class RotatingReader(FakeSecretReader):
+    """A secret mid-rotation: `until` is the end of the old secret's grace window."""
+
+    def __init__(self, until: datetime) -> None:
+        self.until = until
+
+    async def get(self, subscription_id: str) -> SecretMaterial:
+        return SecretMaterial(current="new", previous="old", previous_expires_at=self.until)
+
+    def invalidate(self, subscription_id: str) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("grace", "signatures"),
+    [(timedelta(hours=1), 2), (-timedelta(seconds=1), 1)],
+    ids=["open", "closed"],
+)
+async def test_the_old_secret_signs_too_only_inside_the_grace_window(
+    store: MemoryWebhookDeliveryStore, sender: RecordingSender, grace: timedelta, signatures: int
+) -> None:
+    record = make_record()
+    await store.enqueue_many([record])
+    reader = RotatingReader(datetime.now(UTC) + grace)
+    await make_dispatcher(store=store, sender=sender, secret_reader=reader).send(record)
+    headers = sender.calls[-1]["headers"]
+    assert isinstance(headers, dict)
+    assert len(str(headers["Webhook-Signature"]).split()) == signatures
+
+
+class OwnHeaders:
+    """A custom signer's own header set (GitHub style): one value, no second signature."""
+
+    def __init__(self, mac: str) -> None:
+        self.mac = mac
+
+    def as_dict(self) -> dict[str, str]:
+        return {"X-Hub-Signature-256": f"sha256={self.mac}"}
+
+
+class OwnSigner(HmacSigner):
+    def sign(self, **kw: object) -> OwnHeaders:  # type: ignore[override]
+        # the test reads the header count, not the mac: the secret itself stands in for it
+        return OwnHeaders(str(kw["secret"]))
+
+
+async def test_a_custom_signer_signs_with_the_current_secret_alone_during_the_grace_window(
+    store: MemoryWebhookDeliveryStore, sender: RecordingSender
+) -> None:
+    record = make_record()
+    await store.enqueue_many([record])
+    reader = RotatingReader(datetime.now(UTC) + timedelta(hours=1))
+    profiles = ProfileRegistry.single(DeliveryProfile(signer=OwnSigner()))
+    await make_dispatcher(store=store, sender=sender, secret_reader=reader, profiles=profiles).send(
+        record
+    )
+    headers = sender.calls[-1]["headers"]
+    assert isinstance(headers, dict)
+    assert headers["X-Hub-Signature-256"] == "sha256=new"
